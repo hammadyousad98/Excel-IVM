@@ -1,6 +1,6 @@
 {
   "name": "inventory-management-system",
-  "version": "1.1.2",
+  "version": "1.1.4",
   "description": "Inventory & PO Management System",
   "main": "./out/main/index.js",
   "author": "Antigravity",
@@ -10,6 +10,7 @@
     "build": "electron-vite build",
     "build:win": "npm run build && electron-builder --win",
     "build:mac": "npm run build && electron-builder --mac",
+    "postinstall": "electron-builder install-app-deps",
     "preview": "electron-vite preview",
     "lint": "eslint . --ext .js,.jsx,.ts,.tsx"
   },
