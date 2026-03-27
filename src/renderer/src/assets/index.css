@@ -1,0 +1,150 @@
+@tailwind base;
+@tailwind components;
+@tailwind utilities;
+
+body {
+  margin: 0;
+  font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, Helvetica, Arial, sans-serif;
+}
+
+/* Fix Ag-Grid Header Icons Visibility (White on Blue Header) */
+.ag-theme-alpine .ag-header,
+.ag-theme-quartz .ag-header {
+  background-color: #1e40af !important;
+  /* blue-800 */
+  color: white !important;
+}
+
+.ag-theme-alpine .ag-header-cell-text,
+.ag-theme-quartz .ag-header-cell-text {
+  color: white !important;
+  font-weight: bold !important;
+}
+
+/* Target ONLY icons within the header */
+.ag-theme-alpine .ag-header .ag-icon,
+.ag-theme-quartz .ag-header .ag-icon {
+  display: inline-block !important;
+  visibility: visible !important;
+  opacity: 1 !important;
+  color: white !important;
+  fill: white !important;
+  width: 16px !important;
+  height: 16px !important;
+  background-repeat: no-repeat;
+  background-position: center;
+  background-size: contain;
+}
+
+/* Disable font for header icons to use SVGs/PNGs */
+.ag-theme-alpine .ag-header .ag-icon::before,
+.ag-theme-quartz .ag-header .ag-icon::before {
+  content: none !important;
+}
+
+/* Embedded SVGs / Custom Images for Header Icons */
+
+/* Menu Icon (Hamburger) - Keeping SVG as no PNG provided */
+.ag-theme-alpine .ag-header .ag-icon-menu,
+.ag-theme-quartz .ag-header .ag-icon-menu {
+  background-image: url('data:image/svg+xml;base64,PHN2ZyB4bWxucz0iaHR0cDovL3d3dy53My5vcmcvMjAwMC9zdmciIHZpZXdCb3g9IjAgMCAyNCAyNCIgZmlsbD0id2hpdGUiPjxwYXRoIGQ9Ik0zIDE4aDE4di0ySDN2MnptMC01aDE4di0ySDN2MnptMC03djJoMThWNkgzeiIvPjwvc3ZnPg==') !important;
+}
+
+/* Filter Icon - Using custom PNG */
+.ag-theme-alpine .ag-header .ag-icon-filter,
+.ag-theme-quartz .ag-header .ag-icon-filter {
+  background-image: url('./filter.png') !important;
+}
+
+/* Sort Ascending - Using custom PNG */
+.ag-theme-alpine .ag-header .ag-icon-asc,
+.ag-theme-quartz .ag-header .ag-icon-asc {
+  background-image: url('./sortingArrows.png') !important;
+}
+
+/* Sort Descending - Using custom PNG */
+.ag-theme-alpine .ag-header .ag-icon-desc,
+.ag-theme-quartz .ag-header .ag-icon-desc {
+  background-image: url('./sortingArrows.png') !important;
+  transform: rotate(180deg);
+}
+
+/* Ensure the menu button container is visible */
+.ag-theme-alpine .ag-header-cell-menu-button,
+.ag-theme-quartz .ag-header-cell-menu-button {
+  opacity: 1 !important;
+  display: block !important;
+}
+
+/* Reset icons in menus to be dark (default) */
+.ag-theme-alpine .ag-menu .ag-icon,
+.ag-theme-alpine .ag-filter .ag-icon,
+.ag-theme-quartz .ag-menu .ag-icon,
+.ag-theme-quartz .ag-filter .ag-icon {
+  color: #374151 !important;
+  fill: #374151 !important;
+}
+
+/* Apply Custom Sorting Arrows to Menu (Fix for invisible icons) */
+.ag-theme-alpine .ag-menu .ag-icon-asc,
+.ag-theme-alpine .ag-menu .ag-icon-desc,
+.ag-theme-quartz .ag-menu .ag-icon-asc,
+.ag-theme-quartz .ag-menu .ag-icon-desc {
+  background-image: url('./sortingArrows.png') !important;
+  display: inline-block !important;
+  width: 16px !important;
+  height: 16px !important;
+  background-size: contain !important;
+  background-repeat: no-repeat !important;
+  background-position: center !important;
+  color: transparent !important;
+  /* Hide default font icon */
+}
+
+.ag-theme-alpine .ag-menu .ag-icon-asc::before,
+.ag-theme-alpine .ag-menu .ag-icon-desc::before,
+.ag-theme-quartz .ag-menu .ag-icon-asc::before,
+.ag-theme-quartz .ag-menu .ag-icon-desc::before {
+  content: none !important;
+}
+
+.ag-theme-alpine .ag-menu .ag-icon-desc,
+.ag-theme-quartz .ag-menu .ag-icon-desc {
+  transform: rotate(180deg);
+}
+
+/* Fix for input freezing/selection issues */
+input,
+textarea,
+select {
+  user-select: text !important;
+  -webkit-user-select: text !important;
+}
+
+/* Fix Transparent Menu Background */
+.ag-theme-alpine .ag-menu,
+.ag-theme-alpine .ag-filter,
+.ag-theme-alpine .ag-popup-child,
+.ag-theme-quartz .ag-menu,
+.ag-theme-quartz .ag-filter,
+.ag-theme-quartz .ag-popup-child {
+  background-color: white !important;
+  box-shadow: 0 4px 6px -1px rgba(0, 0, 0, 0.1), 0 2px 4px -1px rgba(0, 0, 0, 0.06) !important;
+  border: 1px solid #e5e7eb !important;
+}
+
+@keyframes fadeInUp {
+  from {
+    opacity: 0;
+    transform: translate3d(0, 20px, 0);
+  }
+
+  to {
+    opacity: 1;
+    transform: none;
+  }
+}
+
+.animate-fade-in-up {
+  animation: fadeInUp 0.5s ease-out;
+}

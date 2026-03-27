@@ -1,0 +1,17 @@
+<!doctype html>
+<html>
+
+<head>
+  <meta charset="UTF-8" />
+  <title>Inventory & PO Management</title>
+  <!-- CRITICAL: Updated CSP to allow Firebase, Blob (Printing), and Chrome Extensions (PDF Viewer) -->
+  <meta http-equiv="Content-Security-Policy"
+    content="default-src 'self' blob: chrome-extension:; script-src 'self' 'unsafe-inline' chrome-extension:; style-src 'self' 'unsafe-inline' chrome-extension:; font-src 'self' data: chrome-extension:; img-src 'self' data: https: blob: chrome-extension:; connect-src 'self' https://identitytoolkit.googleapis.com https://securetoken.googleapis.com https://firestore.googleapis.com https://*.firebaseio.com wss://*.firebaseio.com blob: chrome-extension:; frame-src 'self' blob: chrome-extension:; object-src 'self' blob: chrome-extension:;" />
+</head>
+
+<body>
+  <div id="root"></div>
+  <script type="module" src="/src/main.tsx"></script>
+</body>
+
+</html>
