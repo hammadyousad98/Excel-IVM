@@ -668,22 +668,46 @@ export const PurchaseOrders: React.FC<PurchaseOrdersProps> = ({ onEdit, section 
             const items = data.items || [];
 
             if (items.length > 0) {
+                // Pre-calculate PO level subtotal sum to pro-rate tax/freight accurately
+                const poSubtotalSum = items.reduce((sum: number, item: any) => {
+                    const kgs = Number(item.calculated_kgs || 0);
+                    const qty = Number(item.quantity || 0);
+                    const rate = Number(item.rate || 0);
+                    return sum + (kgs > 0 ? (kgs * rate) : (qty * rate));
+                }, 0);
+
+                const poTotalTax = Number(data.tax_amount || 0);
+                const poTotalFreight = Number(data.freight_amount || 0);
+
                 // Create a row for each item
                 items.forEach((item: any, idx: number) => {
+                    const kgs = Number(item.calculated_kgs || 0);
+                    const qty = Number(item.quantity || 0);
+                    const rate = Number(item.rate || 0);
+                    const itemSubtotal = kgs > 0 ? (kgs * rate) : (qty * rate);
+
+                    // Pro-rate logic: If many items, distribute tax/freight by value ratio
+                    const ratio = poSubtotalSum > 0 ? (itemSubtotal / poSubtotalSum) : (1 / items.length);
+                    const itemTax = poTotalTax * ratio;
+                    const itemFreight = poTotalFreight * ratio;
+                    const itemGrandTotal = itemSubtotal + itemTax + itemFreight;
+
                     const row: any = {
                         'Date': formatDate({ value: data.date }),
                         'Order No': data.order_no || (data.id ? (data.id.startsWith('PO-') || data.id.startsWith('DO-') ? data.id : `${section === 'finished_goods' ? 'DO' : 'PO'}-${data.id}`) : ''),
-                        'Reference No': data.grn_no || '-', // GRN for RM, Order No for FG usually
+                        'Reference No': data.grn_no || '-',
                         'Vendor/Supplier': data.supplier_name || '',
                         'Product Name': item.product_description || item.manual_product_name || 'Unknown Item',
-                        'Quantity': Number(item.quantity || 0),
-                        'Rate': Number(item.rate || 0),
-                        'Subtotal': Number((item.quantity || 0) * (item.rate || 0)),
-                        'Freight': idx === 0 ? Number(data.freight_amount || 0) : '',
-                        'Total Tax': idx === 0 ? Number(data.tax_amount || 0) : '', // Parent level tax - Only on first row
-                        'Grand Total': idx === 0 ? Number(data.grand_total || 0) : '', // Parent level total - Only on first row
+                        'Quantity': qty,
+                        'KG': kgs > 0 ? kgs : '-',
+                        'Rate': rate,
+                        'Subtotal': Number(itemSubtotal.toFixed(2)),
+                        'Freight': Number(itemFreight.toFixed(2)),
+                        'Total Tax': Number(itemTax.toFixed(2)),
+                        'Grand Total': Number(itemGrandTotal.toFixed(2)),
                         'Created By': data.created_by || ''
                     };
+
 
                     // Section Specific Fields
                     if (section === 'finished_goods') {

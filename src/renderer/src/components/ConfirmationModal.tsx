@@ -41,7 +41,7 @@ export const ConfirmationModal: React.FC<ConfirmationModalProps> = ({
                 <h3 className={`text-xl font-bold mb-3 ${isDangerous ? 'text-red-600' : 'text-gray-800'}`}>
                     {title}
                 </h3>
-                <p className="text-gray-600 mb-8 leading-relaxed">
+                <p className="text-gray-600 mb-8 leading-relaxed break-words overflow-hidden">
                     {message}
                 </p>
                 <div className="flex justify-end gap-3">

@@ -3,6 +3,7 @@ import { db } from '../firebase'
 import { collection, doc, writeBatch, serverTimestamp, increment, getDoc } from 'firebase/firestore'
 import { SearchableDropdown } from './SearchableDropdown'
 import { getSuppliersForProduct, fetchProductStock } from '../utils/inventoryUtils'
+import { useAuth } from '../context/AuthContext'
 
 interface BulkAddEntryModalProps {
     isOpen: boolean
@@ -25,6 +26,7 @@ export const BulkAddEntryModal: React.FC<BulkAddEntryModalProps> = ({
     section,
     sheetId
 }) => {
+    const { user } = useAuth()
     const [rows, setRows] = useState<any[]>([])
     const [isLoading, setIsLoading] = useState(false)
     const [error, setError] = useState('')
@@ -243,6 +245,10 @@ export const BulkAddEntryModal: React.FC<BulkAddEntryModalProps> = ({
                 setError(`Row ${i + 1}: Product is required.`)
                 return
             }
+            if (!row.supplier_name) {
+                setError(`Row ${i + 1}: Supplier is required.`);
+                return
+            }
             if (!row.quantity || Number(row.quantity) <= 0) {
                 setError(`Row ${i + 1}: Quantity must be greater than 0.`)
                 return
@@ -264,6 +270,11 @@ export const BulkAddEntryModal: React.FC<BulkAddEntryModalProps> = ({
                         return
                     }
                 }
+            }
+            // Date Validation
+            if (!row.date || isNaN(new Date(row.date).getTime())) {
+                setError(`Row ${i + 1}: Please provide a valid date.`)
+                return
             }
         }
 
@@ -369,7 +380,8 @@ export const BulkAddEntryModal: React.FC<BulkAddEntryModalProps> = ({
                     gsm: product?.gsm || 0,
                     po_no: row.po_no || '',
                     customer_po_no: row.po_no || '',
-                    job_card_id: row.job_card_id || null
+                    job_card_id: row.job_card_id || null,
+                    entry_by: user?.username || user?.email || 'Unknown'
                 })
                 currentBatchSize++;
 

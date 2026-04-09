@@ -1,4 +1,4 @@
-﻿import React, { useMemo, useState, useEffect, useCallback, forwardRef, useImperativeHandle, useRef } from 'react'
+import React, { useMemo, useState, useEffect, useCallback, forwardRef, useImperativeHandle, useRef } from 'react'
 import { AgGridReact } from 'ag-grid-react'
 import { ColDef, ICellEditorParams } from 'ag-grid-community'
 import * as XLSX from 'xlsx'
@@ -324,21 +324,14 @@ export const Inventory: React.FC<{ section?: string }> = ({ section = 'raw_mater
         sheet: null
     })
 
-    const [options, setOptions] = useState<{
-        categories: string[],
-        suppliers: string[],
-        uoms: string[],
-        types: string[],
-        products: string[]
-    }>({
-        categories: [],
-        suppliers: [],
-        uoms: ['Kg', 'Sheet', 'Pc', 'Pcs', 'BTL'],
-        types: section === 'finished_goods'
-            ? ['Sales Order', 'Manufactured Product', 'Delivery Note', 'Opening', 'Return']
-            : ['Issued', 'Opening', 'Purchase', 'Return To Store'],
-        products: []
-    })
+    const [catOptions, setCatOptions] = useState<string[]>([])
+    const [supOptions, setSupOptions] = useState<string[]>([])
+    const [uomOptions, setUomOptions] = useState<string[]>(['Kg', 'Sheet', 'Pc', 'Pcs', 'BTL'])
+    const [prodOptions, setProdOptions] = useState<string[]>([])
+    const transTypes = useMemo(() => section === 'finished_goods'
+        ? ['Sales Order', 'Manufactured Product', 'Delivery Note', 'Opening', 'Return']
+        : ['Issued', 'Opening', 'Purchase', 'Return To Store'], [section])
+
 
     const [productsList, setProductsList] = useState<any[]>([])
     const [quickFilterText, setQuickFilterText] = useState(() => {
@@ -481,52 +474,61 @@ export const Inventory: React.FC<{ section?: string }> = ({ section = 'raw_mater
         };
     }, [selectedSheet, section]);
 
-    // --- 4. Fetch Dropdown Options ---
-    const fetchUniqueValues = useCallback(async () => {
-        try {
-            // Using getDocs for dropdowns to reduce active listeners,
-            // but you could use onSnapshot if categories change often.
-            const catCollName = section === 'finished_goods' ? 'fg_categories' : 'rm_categories';
-            const supCollName = section === 'finished_goods' ? 'fg_buyers' : 'rm_suppliers';
-            const prodCollName = section === 'finished_goods' ? 'fg_products' : 'rm_products';
-            const uomCollName = section === 'finished_goods' ? 'fg_UOM' : 'rm_UOM';
-
-            const [catsSnap, suppsSnap, prodsSnap, uomsSnap] = await Promise.all([
-                getDocs(collection(db, catCollName)),
-                getDocs(collection(db, supCollName)),
-                getDocs(collection(db, prodCollName)),
-                getDocs(collection(db, uomCollName))
-            ]);
-
-            const categories = catsSnap.docs.map(d => d.data().name);
-            const suppliers = suppsSnap.docs.map(d => d.data().name);
-            const products = prodsSnap.docs.map(d => ({ id: d.id, ...d.data() }));
-            const uoms = uomsSnap.docs.map(d => d.data().name);
-
-            setProductsList(products);
-            setOptions(prev => ({
-                ...prev,
-                categories: Array.from(new Set([...prev.categories, ...categories])),
-                suppliers: Array.from(new Set([...prev.suppliers, ...suppliers])),
-                uoms: uoms.length > 0 ? uoms : (section === 'finished_goods' ? ['Pc', 'Set'] : ['Kg', 'Sheet', 'Pc', 'Pcs', 'BTL', 'Roll']),
-                products: products.map((p: any) => p.description)
-            }))
-        } catch (e) {
-            console.error('Failed to fetch options', e)
-        }
-    }, [section])
-
+    // --- 4. Fetch Dropdown Options (Real-time) ---
     useEffect(() => {
-        console.log("[Dashboard] Initializing Dashboard...");
-        fetchUniqueValues()
-    }, [fetchUniqueValues])
+        let isSubscribed = true;
+        const catCollName = section === 'finished_goods' ? 'fg_categories' : 'rm_categories';
+        const supCollName = section === 'finished_goods' ? 'fg_buyers' : 'rm_suppliers';
+        const prodCollName = section === 'finished_goods' ? 'fg_products' : 'rm_products';
+        const uomCollName = section === 'finished_goods' ? 'fg_UOM' : 'rm_UOM';
+
+        const unsubCats = onSnapshot(collection(db, catCollName), (snap) => {
+            if (!isSubscribed) return;
+            const cats = snap.docs.map(d => d.data().name);
+            setCatOptions(Array.from(new Set(cats)));
+        });
+
+        const unsubSups = onSnapshot(collection(db, supCollName), (snap) => {
+            if (!isSubscribed) return;
+            const sups = snap.docs.map(d => d.data().name);
+            setSupOptions(Array.from(new Set(sups)));
+        });
+
+        const unsubProds = onSnapshot(collection(db, prodCollName), (snap) => {
+            if (!isSubscribed) return;
+            const products = snap.docs.map(d => ({ id: d.id, ...d.data() }));
+            setProductsList(products);
+            setProdOptions(products.map((p: any) => p.description));
+        });
+
+        const unsubUoms = onSnapshot(collection(db, uomCollName), (snap) => {
+            if (!isSubscribed) return;
+            const uoms = snap.docs.map(d => d.data().name);
+            setUomOptions(uoms.length > 0 ? uoms : (section === 'finished_goods' ? ['Pc', 'Set'] : ['Kg', 'Sheet', 'Pc', 'Pcs', 'BTL', 'Roll']));
+        });
+
+
+        return () => {
+            isSubscribed = false;
+            unsubCats();
+            unsubSups();
+            unsubProds();
+            unsubUoms();
+        };
+    }, [section]);
 
 
 
-    // --- Auto Sheet Resolver ---
+
     // Given an entry date string, finds or auto-creates a monthly sheet and returns its id + object.
     const resolveSheetForDate = async (dateStr: string): Promise<{ sheetId: string; sheetObj: InventorySheet }> => {
-        const d = dateStr ? new Date(dateStr) : new Date();
+        let d = dateStr ? new Date(dateStr) : new Date();
+        // Validation: If date is invalid, fallback to current session/date or throw error
+        if (isNaN(d.getTime())) {
+            console.error(`[AutoSheet] Invalid date provided: "${dateStr}". Falling back to current date.`);
+            d = new Date();
+        }
+
         const month = d.getMonth() + 1;
         const year = d.getFullYear();
         const sheetCollName = section === 'finished_goods' ? 'fg_inventory_sheets' : 'rm_inventory_sheets';
@@ -610,6 +612,7 @@ export const Inventory: React.FC<{ section?: string }> = ({ section = 'raw_mater
                 quantity: finalQty,
                 warehouse_id: resolvedWarehouseId || null,
                 warehouse_name: resolvedWarehouseName || null,
+                entry_by: user?.username || user?.email || 'Unknown',
                 updatedAt: serverTimestamp()
             };
 
@@ -889,32 +892,12 @@ export const Inventory: React.FC<{ section?: string }> = ({ section = 'raw_mater
 
     const addRow = async () => {
         if (!selectedSheet) return;
-
         if (selectedSheet.isLocked) {
             alert("Sheet is locked.");
             return;
         }
-
-        setIsProcessing(true);
-        const transCollName = section === 'finished_goods' ? 'fg_inventory_transactions' : 'rm_inventory_transactions';
-
-        const newRow = {
-            sheet_id: selectedSheet.id,
-            date: new Date().toISOString().split('T')[0],
-            product_id: '',
-            type: 'Manual',
-            transaction_type: 'Opening',
-            section: section,
-            createdAt: serverTimestamp()
-        };
-
-        try {
-            await addDoc(collection(db, transCollName), newRow);
-        } catch (error: any) {
-            setRenderError('Add Row Error: ' + error.message);
-        } finally {
-            setIsProcessing(false);
-        }
+        // Instead of adding a blank doc, open the modal in "New" mode
+        setAddEntryModal({ isOpen: true });
     }
 
     // --- DN Status Update State ---
@@ -1066,6 +1049,7 @@ export const Inventory: React.FC<{ section?: string }> = ({ section = 'raw_mater
 
             await updateDoc(docRef, {
                 ...updates,
+                entry_by: user?.username || user?.email || 'Unknown',
                 updatedAt: serverTimestamp()
             });
             setStatus('Saved');
@@ -1230,7 +1214,8 @@ export const Inventory: React.FC<{ section?: string }> = ({ section = 'raw_mater
                     width: 150,
                     editable: false, // Restrictions: No Edit
                     cellEditor: SearchableSelectCellEditor,
-                    cellEditorParams: { values: options.suppliers },
+                    cellEditorParams: { values: supOptions },
+
                     filter: true
                 },
                 {
@@ -1247,7 +1232,8 @@ export const Inventory: React.FC<{ section?: string }> = ({ section = 'raw_mater
                     width: 130,
                     editable: false, // Restrictions: No Edit
                     cellEditor: SearchableSelectCellEditor,
-                    cellEditorParams: { values: options.categories },
+                    cellEditorParams: { values: catOptions },
+
                     filter: true
                 },
                 {
@@ -1268,7 +1254,8 @@ export const Inventory: React.FC<{ section?: string }> = ({ section = 'raw_mater
                     width: 200,
                     editable: false, // Restrictions: No Edit
                     cellEditor: SearchableSelectCellEditor,
-                    cellEditorParams: { values: options.products },
+                    cellEditorParams: { values: prodOptions },
+
                     filter: true
                 },
                 {
@@ -1277,7 +1264,8 @@ export const Inventory: React.FC<{ section?: string }> = ({ section = 'raw_mater
                     width: 80,
                     editable: false, // Restrictions: No Edit
                     cellEditor: SearchableSelectCellEditor,
-                    cellEditorParams: { values: options.uoms },
+                    cellEditorParams: { values: uomOptions },
+
                     filter: true
                 },
                 {
@@ -1333,6 +1321,12 @@ export const Inventory: React.FC<{ section?: string }> = ({ section = 'raw_mater
                 field: 'transaction_type',
                 headerName: 'Type',
                 width: 120,
+            },
+            {
+                field: 'entry_by',
+                headerName: 'Entry BY',
+                width: 150,
+                editable: false,
             },
             {
                 field: 'supplier_name',
@@ -1466,7 +1460,8 @@ export const Inventory: React.FC<{ section?: string }> = ({ section = 'raw_mater
                 )
             }] : [])
         ]
-    }, [requestDeleteRow, options, section, isAdmin, selectedSheet, productsList]) // Added selectedSheet and productsList dependency
+    }, [requestDeleteRow, catOptions, supOptions, uomOptions, prodOptions, transTypes, section, isAdmin, selectedSheet, productsList]) // Optimized dependencies
+
 
     const toggleLock = useCallback(async () => {
         if (!selectedSheet || !isAdmin) return;
@@ -1612,7 +1607,10 @@ export const Inventory: React.FC<{ section?: string }> = ({ section = 'raw_mater
                         const qty = Number(normalized['qty'] || normalized['quantity'] || 0);
                         const rate = Number(normalized['rate'] || 0);
 
-                        if (!prodName || qty === 0) continue;
+                        if (!prodName || qty === 0 || !suppName) {
+                            console.warn(`[Import] Skipping row due to missing Product, Qty, or Supplier:`, { prodName, qty, suppName });
+                            continue;
+                        }
 
                         // Lookup / Create Entities
 
@@ -1715,6 +1713,7 @@ export const Inventory: React.FC<{ section?: string }> = ({ section = 'raw_mater
                             calculated_kgs,
                             warehouse_id: whId,
                             warehouse_name: finalWhName,
+                            entry_by: user?.username || user?.email || 'Unknown',
                             createdAt: serverTimestamp()
                         });
 
@@ -1958,7 +1957,8 @@ export const Inventory: React.FC<{ section?: string }> = ({ section = 'raw_mater
                     onSave={handleSaveEntry}
                     section={section}
                     initialData={addEntryModal.data}
-                    suppliersList={options.suppliers}
+                    suppliersList={supOptions}
+
                     warehouses={warehouses}
                 />
 
@@ -1967,7 +1967,8 @@ export const Inventory: React.FC<{ section?: string }> = ({ section = 'raw_mater
                     onClose={() => setShowBulkAddModal(false)}
                     onSuccess={() => setShowBulkAddModal(false)}
                     products={productsList || []}
-                    suppliers={options.suppliers || []}
+                    suppliers={supOptions || []}
+
                     warehouses={warehouses || []}
                     section={section}
                 />
@@ -2084,15 +2085,15 @@ export const Inventory: React.FC<{ section?: string }> = ({ section = 'raw_mater
 
                             <div className="bg-red-50 border border-red-100 p-4 rounded-xl text-sm space-y-2">
                                 <p className="flex items-start gap-2">
-                                    <span className="text-red-600 font-bold">â€¢</span>
+                                    <span className="text-red-600 font-bold">•</span>
                                     <span>All transactions in this sheet will be <strong>permanently deleted</strong>.</span>
                                 </p>
                                 <p className="flex items-start gap-2">
-                                    <span className="text-red-600 font-bold">â€¢</span>
+                                    <span className="text-red-600 font-bold">•</span>
                                     <span>Stock impact of all issues/purchases will be <strong>automatically reversed</strong> in the global inventory.</span>
                                 </p>
                                 <p className="flex items-start gap-2">
-                                    <span className="text-red-600 font-bold">â€¢</span>
+                                    <span className="text-red-600 font-bold">•</span>
                                     <span>Opening stock entries will be removed without affecting global counts.</span>
                                 </p>
                             </div>
@@ -2114,7 +2115,7 @@ export const Inventory: React.FC<{ section?: string }> = ({ section = 'raw_mater
                                 disabled={isProcessing}
                                 className="px-6 py-2 bg-red-600 text-white rounded-xl hover:bg-red-700 font-bold shadow-lg transition-all flex items-center gap-2 disabled:opacity-50"
                             >
-                                {isProcessing ? 'Deleting...' : 'ðŸ—‘ï¸ Delete Everything'}
+                                {isProcessing ? 'Deleting...' : '🗑️ Delete Everything'}
                             </button>
                         </div>
                     </div>

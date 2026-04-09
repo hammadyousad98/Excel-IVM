@@ -277,11 +277,19 @@ export const Dashboard: React.FC<{ section?: string }> = ({ section = 'raw_mater
                 if (window.confirm(`Found ${orphans.length} orphaned transaction fields.\n\nFirst few:\n${summary}\n\nShould I attempt to auto-repair these based on their names?`)) {
                     let fixed = 0;
                     for (const o of orphans) {
-                        const corrId = o.name.includes("1") ? W1_CORRECT : (o.name.includes("2") ? W2_CORRECT : null);
-                        if (corrId) {
-                            await updateDoc(doc(db, "rm_inventory_transactions", o.docId), { [o.field]: corrId });
-                            fixed++;
-                        }
+                            let corrId = null;
+                            if (o.ghostId === 'bZR73v1wwSnaonJPmwJV' || o.ghostId === 'fOhZzsZmB0Tr3TQsLUYt') {
+                                corrId = W1_CORRECT;
+                            } else if (o.name.includes("1")) {
+                                corrId = W1_CORRECT;
+                            } else if (o.name.includes("2")) {
+                                corrId = W2_CORRECT;
+                            }
+                            
+                            if (corrId) {
+                                await updateDoc(doc(db, "rm_inventory_transactions", o.docId), { [o.field]: corrId });
+                                fixed++;
+                            }
                     }
                     alert(`Repaired ${fixed} / ${orphans.length} orphans. For those with 'Unknown' names, you might need to check them manually in the console.`);
                     executeRecalculateStock();
@@ -406,7 +414,7 @@ export const Dashboard: React.FC<{ section?: string }> = ({ section = 'raw_mater
                 ...Object.keys(globalStockMap),
                 ...Object.keys(supplierStockMap),
                 ...Object.keys(warehouseStockMap)
-            ]));
+            ])).filter(pid => productsMap[pid]); // Only update products that still exist
 
             console.log(`Updating stock for ${allPids.length} products...`);
 
@@ -1053,13 +1061,21 @@ export const Dashboard: React.FC<{ section?: string }> = ({ section = 'raw_mater
     return (
         <div className="p-4 h-[calc(100vh-120px)] flex flex-col overflow-hidden">
             <div className="flex justify-between items-center mb-6 flex-shrink-0">
-                <h2 className="text-2xl font-bold">Dashboard</h2>
+                <div className="flex items-center gap-3">
+                    <h2 className="text-2xl font-bold">Dashboard</h2>
+                    <div className="flex items-center gap-1.5 px-2 py-1 bg-green-50 border border-green-200 rounded-full">
+                        <span className="relative flex h-2 w-2">
+                            <span className="animate-ping absolute inline-flex h-full w-full rounded-full bg-green-400 opacity-75"></span>
+                            <span className="relative inline-flex rounded-full h-2 w-2 bg-green-500"></span>
+                        </span>
+                        <span className="text-[10px] font-bold text-green-700 uppercase tracking-wider">Live Sync</span>
+                    </div>
+                </div>
+
                 <div className="flex items-center gap-2">
-                    {/* 
                     <button onClick={runDeepDiagnostics} className="bg-purple-600 text-white px-4 py-2 rounded hover:bg-purple-700 font-bold shadow-sm transition-all">
                         Run Deep Diagnostics
                     </button>
-                    */}
                     <button onClick={() => setIsSettingsOpen(true)} className="bg-gray-800 text-white px-4 py-2 rounded hover:bg-gray-700 flex items-center gap-2">
                         <svg className="w-5 h-5" fill="none" stroke="currentColor" viewBox="0 0 24 24">
                             <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M10.325 4.317c.426-1.756 2.924-1.756 3.35 0a1.724 1.724 0 002.573 1.066c1.543-.94 3.31.826 2.37 2.37a1.724 1.724 0 001.065 2.572c1.756.426 1.756 2.924 0 3.35a1.724 1.724 0 00-1.066 2.573c.94 1.543-.826 3.31-2.37 2.37a1.724 1.724 0 00-2.572 1.065c-.426 1.756-2.924 1.756-3.35 0a1.724 1.724 0 00-2.573-1.066c-1.543.94-3.31-.826-2.37-2.37a1.724 1.724 0 00-1.065-2.572c-1.756-.426-1.756-2.924 0-3.35a1.724 1.724 0 001.066-2.573c-.94-1.543.826-3.31 2.37-2.37.996.608 2.296.07 2.572-1.065z" />

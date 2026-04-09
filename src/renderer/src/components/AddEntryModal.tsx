@@ -165,8 +165,8 @@ export const AddEntryModal: React.FC<AddEntryModalProps> = ({
                 // 3. Fetch Relevant Suppliers for this Product
                 const suppliers = await getSuppliersForProduct(pObj.id, pObj.description);
                 // Add the current supplier if not in list (legacy data support)
-                const currentSupplier = data.supplier_name;
-                if (!suppliers.includes(currentSupplier)) suppliers.push(currentSupplier);
+                const currentSupplier = data.supplier_name || '';
+                if (currentSupplier && !suppliers.includes(currentSupplier)) suppliers.push(currentSupplier);
                 setRelevantSuppliers(suppliers);
                 setSupplier(currentSupplier);
                 setSelectedJobCardId(data.job_card_id || '');

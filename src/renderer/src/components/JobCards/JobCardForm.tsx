@@ -286,22 +286,22 @@ export const JobCardForm: React.FC<JobCardFormProps> = ({ onClose, initialData, 
     };
 
     useEffect(() => {
-        const fetchInitialData = async () => {
-            try {
-                const [catSnap, buyerSnap, prodSnap] = await Promise.all([
-                    getDocs(collection(db, 'fg_categories')),
-                    getDocs(collection(db, 'fg_buyers')),
-                    getDocs(collection(db, 'fg_products'))
-                ])
-                setCategories(catSnap.docs.map(d => ({ id: d.id, ...d.data() })))
-                setBuyers(buyerSnap.docs.map(d => ({ id: d.id, ...d.data() })))
-                setProducts(prodSnap.docs.map(d => ({ id: d.id, ...d.data() })))
-            } catch (err) {
-                console.error("Failed to fetch form data", err)
-            }
-        }
-        fetchInitialData()
-    }, [])
+        const unsubCats = onSnapshot(collection(db, 'fg_categories'), (snap) => {
+            setCategories(snap.docs.map(d => ({ id: d.id, ...d.data() })));
+        });
+        const unsubBuyers = onSnapshot(collection(db, 'fg_buyers'), (snap) => {
+            setBuyers(snap.docs.map(d => ({ id: d.id, ...d.data() })));
+        });
+        const unsubProds = onSnapshot(collection(db, 'fg_products'), (snap) => {
+            setProducts(snap.docs.map(d => ({ id: d.id, ...d.data() })));
+        });
+        return () => {
+            unsubCats();
+            unsubBuyers();
+            unsubProds();
+        };
+    }, []);
+
 
     const fetchExistingJobCardData = async (jobNameValue: string, isRepeatSelected: boolean) => {
         if (!jobNameValue || !isRepeatSelected) return;

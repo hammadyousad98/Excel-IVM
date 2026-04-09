@@ -43,20 +43,23 @@ export const UpdateNotification: React.FC = () => {
             setDownloading(false)
         }
 
-        // @ts-ignore
-        window.electron.ipcRenderer.on('update-available', handleUpdateAvailable)
-        // @ts-ignore
-        window.electron.ipcRenderer.on('download-progress', handleDownloadProgress)
-        // @ts-ignore
-        window.electron.ipcRenderer.on('update-downloaded', handleUpdateDownloaded)
-        // @ts-ignore
-        window.electron.ipcRenderer.on('update-error', handleUpdateError)
-
-        // Check for updates shortly after mount
-        setTimeout(() => {
+        if (window.electron && window.electron.ipcRenderer) {
             // @ts-ignore
-            window.electron.ipcRenderer.invoke('check-for-updates')
-        }, 3000)
+            window.electron.ipcRenderer.on('update-available', handleUpdateAvailable)
+            // @ts-ignore
+            window.electron.ipcRenderer.on('download-progress', handleDownloadProgress)
+            // @ts-ignore
+            window.electron.ipcRenderer.on('update-downloaded', handleUpdateDownloaded)
+            // @ts-ignore
+            window.electron.ipcRenderer.on('update-error', handleUpdateError)
+
+            // Check for updates shortly after mount
+            setTimeout(() => {
+                // @ts-ignore
+                window.electron.ipcRenderer.invoke('check-for-updates')
+            }, 3000)
+        }
+
 
         return () => {
             // @ts-ignore

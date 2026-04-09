@@ -99,7 +99,7 @@ export const SearchableDropdown: React.FC<SearchableDropdownProps> = ({
     }, [isOpen]);
 
     const filtered = options.filter(o =>
-        o.label.toLowerCase().includes(search.toLowerCase())
+        (o.label || "").toLowerCase().includes(search.toLowerCase())
     );
 
     // Reset focused index when search changes
@@ -155,7 +155,7 @@ export const SearchableDropdown: React.FC<SearchableDropdownProps> = ({
     }, [focusedIndex]);
 
     const selectedOption = options.find(o => o.id === value);
-    const selectedLabel = selectedOption ? selectedOption.label : '';
+    const selectedLabel = selectedOption ? (selectedOption.label || "") : '';
 
     return (
         <div className={`relative ${className}`} ref={wrapperRef}>

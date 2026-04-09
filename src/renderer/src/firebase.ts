@@ -19,6 +19,15 @@ const firebaseConfig = {
     messagingSenderId: "111357275790",
     appId: "1:111357275790:web:bd52c1394f13c85a21e3df"
 };
+// const firebaseConfig = {
+//     apiKey: "AIzaSyClzHUHbP9EbRQ8giDGjNxCSI1jWx2bAtE",
+//     authDomain: "testing-ims-a1e1a.firebaseapp.com",
+//     projectId: "testing-ims-a1e1a",
+//     storageBucket: "testing-ims-a1e1a.firebasestorage.app",
+//     messagingSenderId: "850937833323",
+//     appId: "1:850937833323:web:20da7a0fa4be7ef36e8e2e",
+//     measurementId: "G-DX01QDVBX4"
+// };
 
 const app = initializeApp(firebaseConfig);
 const db = getFirestore(app);

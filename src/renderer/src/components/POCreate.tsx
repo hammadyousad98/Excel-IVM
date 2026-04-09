@@ -8,12 +8,14 @@ import {
     doc,
     getDoc,
     getDocs,
+    onSnapshot,
     query,
     where,
     orderBy,
     serverTimestamp,
     increment
 } from 'firebase/firestore'
+
 import { whatsappService } from '../utils/whatsappService'
 import { ConfirmationModal } from './ConfirmationModal'
 import { SearchableDropdown } from './SearchableDropdown'
@@ -160,162 +162,132 @@ export const POCreate: React.FC<POCreateProps> = ({ onCancel, onSuccess, initial
     }, [selectedSupplier, section]);
 
     useEffect(() => {
-        const fetchData = async () => {
-            setIsLoading(true)
-            try {
-                // Fetch Suppliers
-                const supplierCollName = section === 'finished_goods' ? 'fg_buyers' : 'rm_suppliers';
-                const suppliersSnapshot = await getDocs(collection(db, supplierCollName));
-                const s = suppliersSnapshot.docs.map(d => ({ id: d.id, ...d.data() }));
+        let isSubscribed = true;
+        const supplierCollName = section === 'finished_goods' ? 'fg_buyers' : 'rm_suppliers';
+        const productCollName = section === 'finished_goods' ? 'fg_products' : 'rm_products';
+        const categoryCollName = section === 'finished_goods' ? 'fg_categories' : 'rm_categories';
+        const uomCollName = section === 'finished_goods' ? 'fg_UOM' : 'rm_UOM';
 
-                // Fetch Products
-                const productCollName = section === 'finished_goods' ? 'fg_products' : 'rm_products';
-                const productsSnapshot = await getDocs(collection(db, productCollName));
-                const p = productsSnapshot.docs.map(d => ({ id: d.id, ...d.data() }));
+        const unsubSups = onSnapshot(collection(db, supplierCollName), (snap: any) => {
+            if (!isSubscribed) return;
+            const s = snap.docs.map((d: any) => ({ id: d.id, ...d.data() }));
+            const uniqueSuppliers = Array.from(new Map(s.map((item: any) => [item.name, item])).values());
+            setSuppliers(uniqueSuppliers);
+        });
 
-                // Fetch Categories
-                const categoryCollName = section === 'finished_goods' ? 'fg_categories' : 'rm_categories';
-                const categoriesSnapshot = await getDocs(collection(db, categoryCollName));
-                const c = categoriesSnapshot.docs.map(d => ({ id: d.id, ...d.data() }));
+        const unsubProds = onSnapshot(collection(db, productCollName), (snap: any) => {
+            if (!isSubscribed) return;
+            const p = snap.docs.map((d: any) => ({ id: d.id, ...d.data() }));
+            setProducts(p);
+        });
 
-                // Fetch POs (Transactions) for Finished Goods linking
-                if (section === 'finished_goods') {
-                    // Fetch all FG Inventory Transactions to get Manual PO Nos
-                    const transSnapshot = await getDocs(collection(db, 'fg_inventory_transactions'));
-                    const trans = transSnapshot.docs.map(d => d.data());
-                    setTransactions(trans);
+        const unsubCats = onSnapshot(collection(db, categoryCollName), (snap: any) => {
+            if (!isSubscribed) return;
+            const c = snap.docs.map((d: any) => ({ id: d.id, ...d.data() }));
+            setCategories(c);
+        });
 
-                    // Fetch eligible Job Cards for DN linking (All active cards until closure)
-                    const jcQuery = query(
-                        collection(db, 'job_cards'),
-                        where('currentPhase', '>=', 7)
-                    );
-                    const jcSnap = await getDocs(jcQuery);
-                    const fetchedJCs = jcSnap.docs
-                        .map(d => ({ id: d.id, ...d.data() }))
-                        .filter((jc: any) => jc.currentPhase < 8)
-                        .sort((a: any, b: any) => (b.jobCardNo || '').localeCompare(a.jobCardNo || ''));
+        const unsubUoms = onSnapshot(collection(db, uomCollName), (snap: any) => {
+            if (!isSubscribed) return;
+            if (!snap.empty) {
+                setUoms(snap.docs.map((d: any) => d.data().name));
+            } else {
+                setUoms(section === 'finished_goods' ? ['Pc', 'Set'] : ['Kg', 'Sheet', 'Pc', 'Pcs', 'BTL']);
+            }
+        });
 
-                    if (window.electron && window.electron.ipcRenderer) {
-                        window.electron.ipcRenderer.send('log-to-terminal', `Fetched ${fetchedJCs.length} Job Cards for DN linking (FG)`);
-                    }
-                    setJobCards(fetchedJCs);
-                }
+        let unsubWarehouses = () => {};
+        if (section === 'raw_material') {
+            unsubWarehouses = onSnapshot(collection(db, 'warehouses'), (snap: any) => {
+                if (!isSubscribed) return;
+                const warehouseData = snap.docs.map((d: any) => ({ id: d.id, ...d.data() }));
+                const uniqueWarehouses = Array.from(new Map(warehouseData.map((item: any) => [item.name, item])).values());
+                setWarehouses(uniqueWarehouses);
+            });
+        }
 
-                // Basic unique set for UOMs from products (simple approach)
-                const uniqueUoms = Array.from(new Set(p.map((prod: any) => prod.uom).filter(Boolean)));
+        let unsubJCs = () => {};
+        const jcQuery = query(
+            collection(db, 'job_cards'),
+            where('currentPhase', '>=', section === 'finished_goods' ? 7 : 3)
+        );
+        unsubJCs = onSnapshot(jcQuery, (snap: any) => {
+            if (!isSubscribed) return;
+            const fetchedJCs = snap.docs
+                .map((d: any) => ({ id: d.id, ...d.data() }))
+                .filter((jc: any) => jc.currentPhase < 8)
+                .sort((a: any, b: any) => (b.jobCardNo || '').localeCompare(a.jobCardNo || ''));
+            setJobCards(fetchedJCs);
+        });
 
-                // Fix duplicate suppliers by name if any (legacy check)
-                const uniqueSuppliers = Array.from(new Map(s.map((item: any) => [item.name, item])).values())
 
-                setSuppliers(uniqueSuppliers)
-                setProducts(p)
-                setCategories(c)
-                // Fetch Warehouses (RM Only)
-                if (section === 'raw_material') {
-                    const warehouseSnap = await getDocs(collection(db, 'warehouses'))
-                    const warehouseData = warehouseSnap.docs.map(d => ({ id: d.id, ...d.data() }))
+        // Fetch transactions for FG matching (one-shot is okay here or listener)
+        if (section === 'finished_goods') {
+            getDocs(collection(db, 'fg_inventory_transactions')).then(snap => {
+                if (isSubscribed) setTransactions(snap.docs.map(d => d.data()));
+            });
+        }
 
-                    if (warehouseData.length === 0) {
-                        // Seed Warehouses (Only if really empty)
-                        const w1 = await addDoc(collection(db, 'warehouses'), { name: 'Warehouse 1' })
-                        const w2 = await addDoc(collection(db, 'warehouses'), { name: 'Warehouse 2' })
-                        setWarehouses([{ id: w1.id, name: 'Warehouse 1' }, { id: w2.id, name: 'Warehouse 2' }])
-                    } else {
-                        // Deduplicate by name to handle potential duplicate records in Firestore
-                        const uniqueWarehouses = Array.from(
-                            new Map(warehouseData.map((item: any) => [item.name, item])).values()
-                        )
-                        setWarehouses(uniqueWarehouses)
-                    }
-                }
-                // Fetch UOMs
-                const uomCollName = section === 'finished_goods' ? 'fg_UOM' : 'rm_UOM';
-                const uomsSnapshot = await getDocs(collection(db, uomCollName));
-                if (!uomsSnapshot.empty) {
-                    setUoms(uomsSnapshot.docs.map(d => d.data().name));
-                } else {
-                    // Fallback if empty (though ProductManager should seed it)
-                    setUoms(section === 'finished_goods' ? ['Pc', 'Set'] : ['Kg', 'Sheet', 'Pc', 'Pcs', 'BTL'])
-                }
-
-                // Fetch Job Cards for RM Section (All active cards until closure)
-                if (section === 'raw_material') {
-                    const jcQuery = query(
-                        collection(db, 'job_cards'),
-                        where('currentPhase', '>=', 3)
-                    );
-                    const jcSnap = await getDocs(jcQuery);
-                    const fetchedJCs = jcSnap.docs
-                        .map(d => ({ id: d.id, ...d.data() }))
-                        .filter((jc: any) => jc.currentPhase < 8)
-                        .sort((a: any, b: any) => (b.jobCardNo || '').localeCompare(a.jobCardNo || ''));
-
-                    if (window.electron && window.electron.ipcRenderer) {
-                        window.electron.ipcRenderer.send('log-to-terminal', `Fetched ${fetchedJCs.length} Job Cards for PO creation (RM). Criteria: Phase 2 completed, Phase 3 not completed.`);
-                    }
-                    setJobCards(fetchedJCs);
-                } else if (section === 'finished_goods') {
-                    // Already fetched above based on section
-                }
-
-                // Pre-fill if editing
-                if (initialData) {
-                    setSelectedSupplier(initialData.supplier_id)
-                    setDate(initialData.date)
-                    setSelectedCategory(initialData.category || '') // Restore Category
-                    if (initialData.tax_rate > 0) {
-                        setEnableTax(true)
-                        setTaxRate(initialData.tax_rate)
-                    }
-                    if (section === 'finished_goods') {
-                        setLinkedPO(initialData.linked_po_id || '')
-                        setVehicleNo(initialData.vehicle_no || '')
-                        setDriverName(initialData.driver_name || '')
-                        setDriverMobile(initialData.driver_mobile || '')
-                        setDestination(initialData.destination || '')
-                        setOgpNo(initialData.ogp_no || '')
-                        // Load hasSalesTax state
-                        setHasSalesTax(initialData.has_sales_tax || false)
-                    }
-                    if (section === 'raw_material' && initialData.grn_no) {
-                        setGrnNo(initialData.grn_no)
-                        if (initialData.warehouse_id) setSelectedWarehouse(initialData.warehouse_id)
-                    }
-                    if (section === 'raw_material' && initialData.job_card_id) {
-                        setSelectedJobCardId(initialData.job_card_id)
-                    }
-                    if (initialData.freight_amount) {
-                        setFreightAmount(initialData.freight_amount)
-                    }
-                    if (initialData.items) {
-                        setItems(initialData.items.map((i: any) => ({
-                            product_id: i.product_id,
-                            quantity: i.quantity,
-                            rate: i.rate,
-                            length: i.length || 0,
-                            width: i.width || 0,
-                            gsm: i.gsm || 0,
-                            uom: i.uom,
-                            no_of_boxes: i.no_of_boxes,
-                            qty_per_box: i.qty_per_box,
-                            has_short_item: i.has_short_item || false,
-                            short_no_of_boxes: i.short_no_of_boxes || 0,
-                            short_qty_per_box: i.short_qty_per_box || 0,
-                            category: i.category,
-                            calculated_kgs: i.calculated_kgs || 0,
-                            allow_decimals: i.allow_decimals !== undefined ? i.allow_decimals : true
-                        })))
-                    }
-                }
-            } catch (error) {
-                console.error("Error fetching data:", error)
-            } finally {
-                setIsLoading(false)
+        // Pre-fill if editing
+        if (initialData) {
+            setSelectedSupplier(initialData.supplier_id)
+            setDate(initialData.date)
+            setSelectedCategory(initialData.category || '')
+            if (initialData.tax_rate > 0) {
+                setEnableTax(true)
+                setTaxRate(initialData.tax_rate)
+            }
+            if (section === 'finished_goods') {
+                setLinkedPO(initialData.linked_po_id || '')
+                setVehicleNo(initialData.vehicle_no || '')
+                setDriverName(initialData.driver_name || '')
+                setDriverMobile(initialData.driver_mobile || '')
+                setDestination(initialData.destination || '')
+                setOgpNo(initialData.ogp_no || '')
+                setHasSalesTax(initialData.has_sales_tax || false)
+            }
+            if (section === 'raw_material' && initialData.grn_no) {
+                setGrnNo(initialData.grn_no)
+                if (initialData.warehouse_id) setSelectedWarehouse(initialData.warehouse_id)
+            }
+            if (section === 'raw_material' && initialData.job_card_id) {
+                setSelectedJobCardId(initialData.job_card_id)
+            }
+            if (initialData.freight_amount) {
+                setFreightAmount(initialData.freight_amount)
+            }
+            if (initialData.items) {
+                setItems(initialData.items.map((i: any) => ({
+                    product_id: i.product_id,
+                    quantity: i.quantity,
+                    rate: i.rate,
+                    length: i.length || 0,
+                    width: i.width || 0,
+                    gsm: i.gsm || 0,
+                    uom: i.uom,
+                    no_of_boxes: i.no_of_boxes,
+                    qty_per_box: i.qty_per_box,
+                    has_short_item: i.has_short_item || false,
+                    short_no_of_boxes: i.short_no_of_boxes || 0,
+                    short_qty_per_box: i.short_qty_per_box || 0,
+                    category: i.category,
+                    calculated_kgs: i.calculated_kgs || 0,
+                    allow_decimals: i.allow_decimals !== undefined ? i.allow_decimals : true
+                })))
             }
         }
-        fetchData()
-    }, [initialData, section])
+
+        return () => {
+            isSubscribed = false;
+            unsubSups();
+            unsubProds();
+            unsubCats();
+            unsubUoms();
+            unsubWarehouses();
+            unsubJCs();
+        };
+    }, [initialData, section]);
+
 
     const addItem = () => {
         setItems([...items, { product_id: '', quantity: 0, rate: 0, length: 0, width: 0, gsm: 0, uom: '', has_short_item: false, short_no_of_boxes: 0, short_qty_per_box: 0, calculated_kgs: 0, allow_decimals: true }])
