@@ -277,11 +277,11 @@ export const JobCardViewer: React.FC = () => {
                                     </button>
                                 )}
                                 <button
-                                    onClick={() => generateJobCardPdf(selectedJob, { name: 'EXCEL', logo_path: ExcelLogo }, 'print', linkedPOs)}
+                                    onClick={() => generateJobCardPdf(selectedJob, { name: 'EXCEL', logo_path: ExcelLogo }, 'save', linkedPOs)}
                                     className="bg-blue-600 hover:bg-blue-700 text-white px-4 py-2 rounded shadow flex items-center gap-2 font-bold transition"
                                 >
-                                    <svg className="w-4 h-4" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M17 17h2a2 2 0 002-2v-4a2 2 0 00-2-2H5a2 2 0 00-2 2v4a2 2 0 002 2h2m2 4h6a2 2 0 002-2v-4a2 2 0 00-2-2H9a2 2 0 00-2 2v4a2 2 0 002 2zm8-12V5a2 2 0 00-2-2H9a2 2 0 00-2 2v4h10z" /></svg>
-                                    Print / Download Report
+                                    <svg className="w-4 h-4" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M4 16v1a3 3 0 003 3h10a3 3 0 003-3v-1m-4-4l-4 4m0 0l-4-4m4 4V4" /></svg>
+                                    Download
                                 </button>
                             </div>
                         </div>
@@ -371,6 +371,7 @@ export const JobCardViewer: React.FC = () => {
                                                 {[
                                                     { label: 'GSM', key: 'gsm' },
                                                     { label: 'Material Type', key: 'materialType' },
+                                                    { label: 'Printing', key: 'printingType' },
                                                     { label: 'No. of Colours', key: 'noOfColours' },
                                                     { label: 'Lamination', key: 'lamination' },
                                                     { label: 'Coating', key: 'coating' },
@@ -400,6 +401,7 @@ export const JobCardViewer: React.FC = () => {
                                                 {[
                                                     { label: 'GSM', key: 'gsm' },
                                                     { label: 'Material Type', key: 'materialType' },
+                                                    { label: 'Printing', key: 'printingType' },
                                                     { label: 'No. of Colours', key: 'noOfColours' },
                                                     { label: 'Lamination', key: 'lamination' },
                                                     { label: 'Coating', key: 'coating' },
@@ -438,7 +440,24 @@ export const JobCardViewer: React.FC = () => {
                                                 {Object.entries({
                                                     'Plates': 'plates', 'Pos. UV': 'positiveUV', 'Pos. Die': 'positiveDie',
                                                     'Pos. Foil': 'positiveFoil', 'Emboss. Pos.': 'embossingBlackPositive',
-                                                    'Shade Card': 'shadeCard', 'Ups': 'ups', 'Sheet Size': 'sheetSize',
+                                                    'Shade Card': 'shadeCard', 'Ups': 'ups'
+                                                }).map(([label, key]) => (
+                                                    <div key={key} className="flex border-b border-r border-black last:border-r-0">
+                                                        <td className="p-1 font-bold w-1/2 border-r border-black bg-gray-50">{label}</td>
+                                                        <td className="p-1 w-1/2">{selectedJob.phase2Data?.[key] || '-'}</td>
+                                                    </div>
+                                                ))}
+                                                <div className="flex border-b border-black">
+                                                    <td className="p-1 font-bold w-1/2 border-r border-black bg-gray-50">Sheet Size</td>
+                                                    <td className="p-1 w-1/2">
+                                                        {selectedJob.phase2Data?.sheetSizeL || selectedJob.phase2Data?.sheetSizeW || selectedJob.phase2Data?.sheetSizeGsm ? (
+                                                            `L: ${selectedJob.phase2Data?.sheetSizeL || '-'} W: ${selectedJob.phase2Data?.sheetSizeW || '-'} GSM: ${selectedJob.phase2Data?.sheetSizeGsm || '-'}`
+                                                        ) : (
+                                                            selectedJob.phase2Data?.sheetSize || '-'
+                                                        )}
+                                                    </td>
+                                                </div>
+                                                {Object.entries({
                                                     'Finished Size': 'finishedSize', 'Pages': 'numberOfPages', 'Digital Dummy': 'digitalDummy'
                                                 }).map(([label, key]) => (
                                                     <div key={key} className="flex border-b border-r border-black last:border-r-0">
@@ -604,6 +623,7 @@ export const JobCardViewer: React.FC = () => {
                                                 <th className="border border-black p-1">FG</th>
                                                 <th className="border border-black p-1">Binding</th>
                                                 <th className="border border-black p-1">Packing</th>
+                                                <th className="border border-black p-1">Attachment</th>
                                             </tr>
                                         </thead>
                                         <tbody>
@@ -616,9 +636,17 @@ export const JobCardViewer: React.FC = () => {
                                                     <td className="border border-black p-1 font-bold text-center">{log.fg || '-'}</td>
                                                     <td className="border border-black p-1">{log.binding || '-'}</td>
                                                     <td className="border border-black p-1">{log.packing || '-'}</td>
+                                                    <td className="border border-black p-1 text-center">
+                                                        {log.fileUrl ? (
+                                                            <a href={log.fileUrl} target="_blank" rel="noopener noreferrer" className="text-blue-600 hover:underline inline-flex items-center gap-1 font-bold">
+                                                                <svg className="w-3 h-3 shrink-0" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M15.172 7l-6.586 6.586a2 2 0 102.828 2.828l6.414-6.586a4 4 0 00-5.656-5.656l-6.415 6.585a6 6 0 108.486 8.486L20.5 13" /></svg>
+                                                                View
+                                                            </a>
+                                                        ) : '-'}
+                                                    </td>
                                                 </tr>
                                             )) : (
-                                                <tr><td colSpan={7} className="border border-black p-2 text-center text-gray-400 italic">No QC logs recorded</td></tr>
+                                                <tr><td colSpan={8} className="border border-black p-2 text-center text-gray-400 italic">No QC logs recorded</td></tr>
                                             )}
                                         </tbody>
                                     </table>

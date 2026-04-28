@@ -8,6 +8,7 @@ import {
     setPersistence,
     browserLocalPersistence
 } from 'firebase/auth';
+import { getStorage } from 'firebase/storage';
 
 // --- PASTE YOUR FIREBASE CONFIG HERE ---
 // Make sure these match your project exactly
@@ -15,7 +16,7 @@ const firebaseConfig = {
     apiKey: "AIzaSyBRf2TlMB_5hTPyB6u4iyMBWcQUczb5JwA",
     authDomain: "excelinventorymanagement.firebaseapp.com",
     projectId: "excelinventorymanagement",
-    storageBucket: "excelinventorymanagement.firebasestorage.app",
+    storageBucket: "excelinventorymanagement.appspot.com",
     messagingSenderId: "111357275790",
     appId: "1:111357275790:web:bd52c1394f13c85a21e3df"
 };
@@ -32,6 +33,7 @@ const firebaseConfig = {
 const app = initializeApp(firebaseConfig);
 const db = getFirestore(app);
 const auth = getAuth(app);
+const storage = getStorage(app, "gs://excelinventorymanagement.appspot.com");
 
 // Enable Offline Persistence
 // Enable Offline Persistence
@@ -49,4 +51,4 @@ setPersistence(auth, browserLocalPersistence).catch((error) => {
     console.error("Auth persistence error:", error);
 });
 
-export { db, auth };
+export { db, auth, storage };

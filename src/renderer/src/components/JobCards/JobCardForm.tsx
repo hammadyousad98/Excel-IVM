@@ -1,7 +1,8 @@
 import React, { useState, useEffect } from 'react'
 import { useAuth } from '../../context/AuthContext'
 import { doc, serverTimestamp, setDoc, updateDoc, collection, getDocs, addDoc, query, where, deleteDoc, writeBatch, onSnapshot, orderBy } from 'firebase/firestore'
-import { db } from '../../firebase'
+import { db, storage } from '../../firebase'
+import { ref, uploadBytes, getDownloadURL } from 'firebase/storage'
 import { SearchableDropdown } from '../SearchableDropdown'
 import { whatsappService } from '../../utils/whatsappService'
 import { generateJobCardPdf } from '../../utils/pdfGenerator'
@@ -9,6 +10,18 @@ import { ConfirmationModal } from '../ConfirmationModal'
 
 const MATERIAL_TYPES = [
     'Bleach board', 'Box board', 'Art card', 'Art paper', 'Matt paper', 'Rigid box', 'Sticker', 'Offset paper'
+]
+
+const PRODUCTION_MACHINES = [
+    "Heidelberg 5 Color",
+    "Heidelberg Solna 2 Color",
+    "Heidelberg CD-74",
+    "Bobst-1",
+    "Bobst-2",
+    "FG-1",
+    "KBA 102",
+    "Kirma-1",
+    "Kirma-2"
 ]
 
 interface JobCardFormProps {
@@ -61,18 +74,22 @@ export const JobCardForm: React.FC<JobCardFormProps> = ({ onClose, initialData, 
     // Phase 1 (Marketing)
     const [customerData, setCustomerData] = useState(initialData?.customerData || {
         customerName: '', jobName: '', newOrRepeat: 'New', poDate: '', poQuantity: '', poNo: '', tolerance: '',
-        variants: initialData?.customerData?.variants || [], comments: ''
+        variants: initialData?.customerData?.variants || [], comments: '',
+        marketingManagerSignature: false, poFileUrl: '', poFileName: '', sampleFileUrl: '', sampleFileName: ''
     })
     const [requirements, setRequirements] = useState(initialData?.requirements || {
         categoryId: '', categoryName: '',
-        titlePage: { gsm: '', materialType: '', noOfColours: '', lamination: '', coating: '', texture: '', uvDripOff: '', embossing: '', foiling: '', binding: '' },
-        innerPages: { gsm: '', materialType: '', noOfColours: '', lamination: '', coating: '', texture: '', uvDripOff: '', embossing: '', foiling: '', binding: '' }
+        titlePage: { gsm: '', materialType: '', printingType: '', noOfColours: '', lamination: '', coating: '', texture: '', uvDripOff: '', embossing: '', foiling: '', binding: '' },
+        innerPages: { gsm: '', materialType: '', printingType: '', noOfColours: '', lamination: '', coating: '', texture: '', uvDripOff: '', embossing: '', foiling: '', binding: '' }
     })
     const [otherSpecs, setOtherSpecs] = useState<string>(initialData?.otherSpecs || '')
 
     // Phase 2 (Pre Press)
     const [phase2Data, setPhase2Data] = useState(initialData?.phase2Data || {
-        plates: '', positiveUV: '', positiveDie: '', positiveFoil: '', embossingBlackPositive: '', shadeCard: '', ups: '', sheetSize: '', finishedSize: '', numberOfPages: '', digitalDummy: '', comments: '', marketingManagerSignature: false
+        plates: '', positiveUV: '', positiveDie: '', positiveFoil: '', embossingBlackPositive: '', shadeCard: '', ups: '', 
+        sheetSize: '', sheetSizeL: '', sheetSizeW: '', sheetSizeGsm: '', 
+        finishedSize: '', numberOfPages: '', digitalDummy: '', comments: '',
+        sampleFileUrl: '', sampleFileName: ''
     })
 
     // Phase 3 (Procurement)
@@ -104,7 +121,8 @@ export const JobCardForm: React.FC<JobCardFormProps> = ({ onClose, initialData, 
     })
 
     const [newQCLog, setNewQCLog] = useState({
-        uv: '', printing: '', dieCutting: '', lamination: '', fg: '', binding: '', packing: ''
+        uv: '', printing: '', dieCutting: '', lamination: '', fg: '', binding: '', packing: '',
+        fileUrl: '', fileName: ''
     })
 
     // Phase 7 (Delivery Status)
@@ -128,6 +146,7 @@ export const JobCardForm: React.FC<JobCardFormProps> = ({ onClose, initialData, 
 
     const [activeTab, setActiveTab] = useState<number>(initialPhase || initialData?.currentPhase || 1)
     const [loading, setLoading] = useState(false)
+    const [fieldLoading, setFieldLoading] = useState<Record<string, boolean>>({})
     const [error, setError] = useState('')
 
     // Confirmation Modal State
@@ -233,7 +252,7 @@ export const JobCardForm: React.FC<JobCardFormProps> = ({ onClose, initialData, 
             ...phase6Data,
             qcLogs: [...(phase6Data.qcLogs || []), { ...newQCLog, id }]
         });
-        setNewQCLog({ uv: '', printing: '', dieCutting: '', lamination: '', fg: '', binding: '', packing: '' });
+        setNewQCLog({ uv: '', printing: '', dieCutting: '', lamination: '', fg: '', binding: '', packing: '', fileUrl: '', fileName: '' });
     };
 
     const deleteQCLog = (id: string) => {
@@ -283,6 +302,70 @@ export const JobCardForm: React.FC<JobCardFormProps> = ({ onClose, initialData, 
             ...phase7Data,
             deliveryLogs: phase7Data.deliveryLogs.filter((log: any) => log.id !== id)
         });
+    };
+
+    const handleFileUpload = async (e: React.ChangeEvent<HTMLInputElement>, folder: string, fieldToUpdate: string, stateUpdateFn: any) => {
+        const file = e.target.files?.[0];
+        if (!file) return;
+
+        // 5MB Limit Check
+        const MAX_SIZE = 5 * 1024 * 1024; // 5MB
+        if (file.size > MAX_SIZE) {
+            setError("File is too large. Maximum allowed size is 5MB.");
+            e.target.value = '';
+            return;
+        }
+
+        // Validation for file types
+        const allowedTypes = ['application/pdf', 'image/png', 'image/jpeg', 'image/jpg'];
+        if (!allowedTypes.includes(file.type)) {
+            setError("Invalid file type. Only PDF, PNG, JPG, JPEG are allowed.");
+            e.target.value = '';
+            return;
+        }
+
+        const fileNameField = fieldToUpdate.replace('Url', 'Name');
+        setFieldLoading(prev => ({ ...prev, [fieldToUpdate]: true }));
+        setError('');
+
+        if (window.electron?.ipcRenderer) {
+            window.electron.ipcRenderer.send('log-to-terminal', `Starting Cloudinary upload: ${file.name} (${(file.size / 1024 / 1024).toFixed(2)} MB)`);
+        }
+
+        try {
+            // In Electron, the 'path' property on File objects contains the absolute path on disk.
+            // We use this to read and upload the file from the Main process to bypass CSP/SSL issues.
+            const filePath = (file as any).path;
+
+            if (!filePath) {
+                throw new Error("Could not access file path. Please try dragging the file onto the input.");
+            }
+
+            const result = await window.electron.ipcRenderer.invoke('upload-to-cloudinary', {
+                filePath,
+                folder: `job_cards/${folder}`
+            });
+
+            const downloadUrl = result.secure_url;
+
+            stateUpdateFn((prev: any) => ({
+                ...prev,
+                [fieldToUpdate]: downloadUrl,
+                [fileNameField]: file.name
+            }));
+
+            if (window.electron?.ipcRenderer) {
+                window.electron.ipcRenderer.send('log-to-terminal', `Cloudinary upload successful: ${file.name}`);
+            }
+        } catch (err: any) {
+            console.error("Cloudinary upload failed", err);
+            setError(`Upload failed: ${err.message || 'Please check your internet connection and try again.'}`);
+            if (window.electron?.ipcRenderer) {
+                window.electron.ipcRenderer.send('log-to-terminal', `Cloudinary Error: ${err.message}`);
+            }
+        } finally {
+            setFieldLoading(prev => ({ ...prev, [fieldToUpdate]: false }));
+        }
     };
 
     useEffect(() => {
@@ -367,11 +450,11 @@ export const JobCardForm: React.FC<JobCardFormProps> = ({ onClose, initialData, 
 
     // Real-time listener for RM Inventory Transactions (Store Phase)
     useEffect(() => {
-        if (!initialData?.id) return;
+        if (!activeDocId) return;
 
         const q = query(
             collection(db, 'rm_inventory_transactions'),
-            where('job_card_id', '==', initialData.id)
+            where('job_card_id', '==', activeDocId)
         );
 
         const unsubscribe = onSnapshot(q, (snapshot) => {
@@ -386,18 +469,76 @@ export const JobCardForm: React.FC<JobCardFormProps> = ({ onClose, initialData, 
         });
 
         return () => unsubscribe();
-    }, [initialData?.id]);
+    }, [activeDocId]);
+
+    // Real-time listener for RM Purchase Orders (Procurement Phase)
+    useEffect(() => {
+        if (!activeDocId) return;
+
+        const q = query(
+            collection(db, 'rm_purchase_orders'),
+            where('job_card_id', '==', activeDocId)
+        );
+
+        const unsubscribe = onSnapshot(q, (snapshot) => {
+            if (!snapshot.empty) {
+                const poDocs = snapshot.docs.map(d => ({ id: d.id, ...d.data() }));
+                const allItems = poDocs.flatMap((po: any) => po.items || []);
+                
+                if (allItems.length > 0) {
+                    // Extract unique types, sizes, and gsm
+                    const types = Array.from(new Set(allItems.map((i: any) => i.product_description || i.category))).filter(Boolean);
+                    const sizes = Array.from(new Set(allItems.map((i: any) => (i.length && i.width) ? `${i.length}x${i.width}` : ''))).filter(Boolean);
+                    const gsms = Array.from(new Set(allItems.map((i: any) => i.gsm))).filter(val => val !== undefined && val !== null && val !== '');
+                    const totalQty = allItems.reduce((sum: number, i: any) => sum + Number(i.quantity || 0), 0);
+                    const poNumbers = poDocs.map((po: any) => po.order_no).filter(Boolean);
+
+                    setPhase3Data({
+                        materialType: types.join(', '),
+                        materialSize: sizes.join(', '),
+                        gsm: gsms.join(', '),
+                        noOfSheets: totalQty.toString(),
+                        comments: `Linked POs: ${poNumbers.join(', ')}`
+                    });
+
+                    // Auto-complete Phase 3 status locally
+                    setPhaseStatuses(prev => {
+                        if (prev[3] !== 'completed') {
+                            return { ...prev, 3: 'completed' };
+                        }
+                        return prev;
+                    });
+                }
+            }
+        }, (err) => {
+            console.error("Phase 3 Sync Error:", err);
+        });
+
+        return () => unsubscribe();
+    }, [activeDocId]);
 
     const isPhaseUnlocked = (phaseNum: number) => {
+        // If the job card is completed, all phases should be accessible for viewing
+        if (status?.toLowerCase() === 'completed') return true;
+
+        // If this specific phase is already completed, it's always unlocked for viewing/editing (subject to role permissions)
+        if (phaseStatuses[phaseNum] === 'completed') return true;
+
         if (phaseNum === 1) return true;
-        if (phaseNum === 3) {
-            return phaseStatuses[2] === 'completed' && phase2Data.marketingManagerSignature === true;
+        if (phaseNum === 2) {
+            return phaseStatuses[1] === 'completed' && customerData.marketingManagerSignature === true;
         }
         return phaseStatuses[phaseNum - 1] === 'completed';
     }
 
     const canEditPhase = (phaseNum: number) => {
         if (!user) return false;
+
+        // Restriction: If job card is completed, only admin and marketing_manager can edit
+        if (status?.toLowerCase() === 'completed') {
+            return ['admin', 'marketing_manager'].includes(user.role);
+        }
+
         const allowedRoles = PHASE_ROLES[phaseNum] || [];
         const hasRole = allowedRoles.includes(user.role);
 
@@ -452,35 +593,6 @@ export const JobCardForm: React.FC<JobCardFormProps> = ({ onClose, initialData, 
                 }
             }
 
-            // Special Notification for Marketing Manager when Phase 2 is completed by regular user
-            if (targetPhase === 2 && !isReconfirm) {
-                const mmQuery = query(usersRef, where('role', '==', 'marketing_manager'));
-                const mmSnapshot = await getDocs(mmQuery);
-                const mmMsg = `Job Card ${jobNum} Phase 2 has been completed and requires your approval. Please review and sign off.`;
-
-                for (const mmDoc of mmSnapshot.docs) {
-                    const mmData = mmDoc.data();
-
-                    // In-app notification
-                    await addDoc(collection(db, 'notifications'), {
-                        role: 'marketing_manager',
-                        title: `Approval Required: ${jobNum}`,
-                        message: mmMsg,
-                        read: false,
-                        createdAt: serverTimestamp(),
-                        linkToJobCard: jobNum,
-                        jobCardId: id,
-                        targetPhase: 2
-                    });
-
-                    // WhatsApp notification
-                    if (mmData.whatsappNumber) {
-                        await whatsappService.sendMessage(mmData.whatsappNumber, mmMsg);
-                    }
-                }
-            }
-
-
         } catch (error) {
             console.error("Failed to send WhatsApp notifications", error);
             if (window.electron && window.electron.ipcRenderer) {
@@ -498,12 +610,20 @@ export const JobCardForm: React.FC<JobCardFormProps> = ({ onClose, initialData, 
             const totalActualWastage = (phase5Data.productionLogs || []).reduce((sum: number, log: any) => sum + Number(log.waste || 0), 0);
             const allowedWastage = Number(phase5Data.allowedWastage || 0);
             const excessWastage = Math.max(0, totalActualWastage - allowedWastage);
+            
+            const calculatedExcessPercent = allowedWastage > 0 ? ((excessWastage / allowedWastage) * 100).toFixed(2) : '0.00';
+            const calculatedActualPercent = allowedWastage > 0 ? ((totalActualWastage / allowedWastage) * 100).toFixed(2) : '0.00';
 
             if (excessWastage > 0 && !phase8Data.rootCause?.trim()) {
                 setError("Root Cause is mandatory because actual wastage exceeds allowed wastage.");
                 setLoading(false);
                 return;
             }
+
+            // Update phase8Data with calculated values before saving
+            phase8Data.actualWastePercent = calculatedActualPercent;
+            phase8Data.excessWastePercent = calculatedExcessPercent;
+            setPhase8Data({ ...phase8Data });
         }
 
         const isEditingPast = phaseStatuses[phaseNum] === 'completed' || phaseStatuses[phaseNum] === 'needs_reconfirmation';
@@ -540,13 +660,13 @@ export const JobCardForm: React.FC<JobCardFormProps> = ({ onClose, initialData, 
             setCurrentPhase(newCurrentPhase);
         }
 
-        // If Phase 2 is being confirmed, and we're NOT the marketing manager approving it right now
+        // If Phase 1 is being confirmed, and we're NOT the marketing manager approving it right now
         // (meaning it's just the regular phase completion), we don't advance the phase if signature is missing
-        if (phaseNum === 2 && !phase2Data.marketingManagerSignature) {
-            // Don't auto-advance to phase 3 yet
-            if (newCurrentPhase === 3) {
-                setCurrentPhase(2);
-                setActiveTab(2);
+        if (phaseNum === 1 && !customerData.marketingManagerSignature) {
+            // Don't auto-advance to phase 2 yet
+            if (newCurrentPhase === 2) {
+                setCurrentPhase(1);
+                setActiveTab(1);
             }
         }
 
@@ -584,17 +704,27 @@ export const JobCardForm: React.FC<JobCardFormProps> = ({ onClose, initialData, 
                 try {
                     const batch = writeBatch(db);
 
-                    // 1. Resolve IDs
-                    const buyerDoc = buyers.find(b => b.name === customerData.customerName);
-                    const categoryDoc = categories.find(c => c.name === requirements.categoryName);
-                    const productDoc = products.find(p => p.description === customerData.jobName);
+                    if (window.electron && window.electron.ipcRenderer) {
+                        window.electron.ipcRenderer.send('log-to-terminal', `Syncing Sales Order for ${customerData.customerName} - ${customerData.jobName}`);
+                    }
+
+                    // 1. Resolve IDs with better matching
+                    const buyerDoc = buyers.find(b => b.name?.trim().toLowerCase() === customerData.customerName?.trim().toLowerCase());
+                    const categoryDoc = categories.find(c => c.name?.trim().toLowerCase() === requirements.categoryName?.trim().toLowerCase());
+                    const productDoc = products.find(p => p.description?.trim().toLowerCase() === customerData.jobName?.trim().toLowerCase());
+
+                    if (window.electron && window.electron.ipcRenderer) {
+                        if (!buyerDoc) window.electron.ipcRenderer.send('log-to-terminal', `WARN: Buyer not found: ${customerData.customerName}`);
+                        if (!categoryDoc) window.electron.ipcRenderer.send('log-to-terminal', `WARN: Category not found: ${requirements.categoryName}`);
+                        if (!productDoc) window.electron.ipcRenderer.send('log-to-terminal', `WARN: Product not found: ${customerData.jobName}`);
+                    }
 
                     const soData: any = {
                         date: customerData.poDate || jobCardDate,
                         customer_id: buyerDoc?.id || '',
                         customer_name: customerData.customerName,
                         po_no: customerData.poNo,
-                        job_card_id: docRef.id, // Use updated ID
+                        job_card_id: docRef.id,
                         job_card_no: savedCardNo,
                         items: [{
                             category_id: categoryDoc?.id || '',
@@ -615,13 +745,24 @@ export const JobCardForm: React.FC<JobCardFormProps> = ({ onClose, initialData, 
                     let soTargetRef;
 
                     if (!currentSOId) {
+                        // Check if an SO already exists for this Job Card ID (to prevent duplicates if state is lost)
+                        const existingSOQuery = query(soColl, where('job_card_id', '==', docRef.id));
+                        const existingSOSnap = await getDocs(existingSOQuery);
+                        
+                        if (!existingSOSnap.empty) {
+                            currentSOId = existingSOSnap.docs[0].id;
+                            setSalesOrderId(currentSOId);
+                        }
+                    }
+
+                    if (!currentSOId) {
                         soTargetRef = doc(soColl);
                         soData.createdAt = serverTimestamp();
                         soData.createdBy = user?.uid || 'system';
                         batch.set(soTargetRef, soData);
                         currentSOId = soTargetRef.id;
                         setSalesOrderId(currentSOId);
-                        // Update the job card itself with the SO ID
+                        // Update the job card with the SO ID separately to ensure it is recorded
                         await updateDoc(docRef, { salesOrderId: currentSOId });
                     } else {
                         soTargetRef = doc(db, 'fg_sales_orders', currentSOId);
@@ -658,14 +799,13 @@ export const JobCardForm: React.FC<JobCardFormProps> = ({ onClose, initialData, 
                         where('so_id', '==', currentSOId)
                     );
                     const transSnap = await getDocs(transQuery);
-                    // Clear existing if updating
                     transSnap.docs.forEach(d => batch.delete(d.ref));
 
                     const newTransRef = doc(collection(db, 'fg_inventory_transactions'));
                     batch.set(newTransRef, {
                         sheet_id: sheetId,
-                        job_card_id: docRef.id, // Direct link for cleanup
-                        so_id: currentSOId, // Link to SO for later updates
+                        job_card_id: docRef.id,
+                        so_id: currentSOId,
                         date: soData.date,
                         type: 'Sales Order',
                         transaction_type: 'Sales Order',
@@ -687,15 +827,55 @@ export const JobCardForm: React.FC<JobCardFormProps> = ({ onClose, initialData, 
                     });
 
                     await batch.commit();
+                    if (window.electron && window.electron.ipcRenderer) {
+                        window.electron.ipcRenderer.send('log-to-terminal', `Successfully synced Sales Order and Transaction for ${savedCardNo}`);
+                    }
 
                 } catch (error) {
                     console.error("Error creating/updating Sales Order:", error);
-                    setError("Job Card saved, but failed to create/update connected Sales Order.");
+                    setError("Job Card saved, but failed to sync Sales Order system.");
+                    if (window.electron && window.electron.ipcRenderer) {
+                        window.electron.ipcRenderer.send('log-to-terminal', `ERR: Sales Order sync failed: ${error instanceof Error ? error.message : String(error)}`);
+                    }
                 }
             }
 
             if (window.electron && window.electron.ipcRenderer) {
                 window.electron.ipcRenderer.send('log-to-terminal', `Saved Job Card ${savedCardNo}`);
+            }
+
+            if (phaseNum === 1 && !customerData.marketingManagerSignature) {
+                try {
+                    const mmQuery = query(collection(db, 'users'), where('role', '==', 'marketing_manager'));
+                    const mmSnapshot = await getDocs(mmQuery);
+                    const mmMsg = `Job Card ${savedCardNo} Phase 1 has been completed and requires your approval. Please review and sign off.`;
+
+                    for (const mmDoc of mmSnapshot.docs) {
+                        const mmData = mmDoc.data();
+                        
+                        // In-app notification
+                        await addDoc(collection(db, 'notifications'), {
+                            role: 'marketing_manager',
+                            title: `Approval Required: ${savedCardNo}`,
+                            message: mmMsg,
+                            read: false,
+                            createdAt: serverTimestamp(),
+                            linkToJobCard: savedCardNo,
+                            jobCardId: docRef.id,
+                            targetPhase: 1
+                        });
+
+                        // WhatsApp notification
+                        if (mmData.whatsappNumber) {
+                            await whatsappService.sendMessage(mmData.whatsappNumber, mmMsg);
+                        }
+                    }
+                    if (window.electron && window.electron.ipcRenderer) {
+                        window.electron.ipcRenderer.send('log-to-terminal', `Sent notification to Marketing Managers for Phase 1 approval.`);
+                    }
+                } catch (error) {
+                    console.error("Failed to send Phase 1 approval notifications", error);
+                }
             }
 
         } catch (err) {
@@ -707,7 +887,7 @@ export const JobCardForm: React.FC<JobCardFormProps> = ({ onClose, initialData, 
     }
 
     const handleMarketingManagerApproval = async () => {
-        setPhase2Data((prev: any) => ({ ...prev, marketingManagerSignature: true }));
+        setCustomerData((prev: any) => ({ ...prev, marketingManagerSignature: true }));
         setIsMarketingApprovalModalOpen(false);
 
         // Save the change and advance phase if needed
@@ -715,21 +895,21 @@ export const JobCardForm: React.FC<JobCardFormProps> = ({ onClose, initialData, 
         try {
             const docRef = doc(db, 'job_cards', activeDocId!);
 
-            // Advance phase to 3
-            setPhaseStatuses((prev: any) => ({ ...prev, 2: 'completed' }));
-            setCurrentPhase(3);
-            setActiveTab(3);
+            // Advance phase to 2
+            setPhaseStatuses((prev: any) => ({ ...prev, 1: 'completed' }));
+            setCurrentPhase(2);
+            setActiveTab(2);
 
             await updateDoc(docRef, {
-                phase2Data: { ...phase2Data, marketingManagerSignature: true },
-                'phaseStatuses.2': 'completed',
-                currentPhase: 3,
+                customerData: { ...customerData, marketingManagerSignature: true },
+                'phaseStatuses.1': 'completed',
+                currentPhase: 2,
                 updatedAt: serverTimestamp()
             });
 
-            // Notify PO Officer that phase 3 is ready
-            const notificationMsg = `Job Card ${jobCardNo} Phase 2 approved by Marketing Manager. Ready for Phase 3.`;
-            await sendNotification(3, notificationMsg, jobCardNo, activeDocId);
+            // Notify Pre-Press that phase 2 is ready
+            const notificationMsg = `Job Card ${jobCardNo} Phase 1 approved by Marketing Manager. Ready for Phase 2.`;
+            await sendNotification(2, notificationMsg, jobCardNo, activeDocId);
 
             if (window.electron && window.electron.ipcRenderer) {
                 window.electron.ipcRenderer.send('log-to-terminal', `Marketing Manager approved Job Card ${jobCardNo}`);
@@ -779,6 +959,48 @@ export const JobCardForm: React.FC<JobCardFormProps> = ({ onClose, initialData, 
         }
     }
 
+    const renderFilePreview = (url: string | undefined, name: string | undefined, loadingField: string) => {
+        if (fieldLoading[loadingField]) {
+            return (
+                <div className="flex items-center gap-2 text-blue-600 animate-pulse text-xs font-bold mt-1">
+                    <svg className="animate-spin h-4 w-4" viewBox="0 0 24 24">
+                        <circle className="opacity-25" cx="12" cy="12" r="10" stroke="currentColor" strokeWidth="4" fill="none" />
+                        <path className="opacity-75" fill="currentColor" d="M4 12a8 8 0 018-8V0C5.373 0 0 5.373 0 12h4z" />
+                    </svg>
+                    Uploading...
+                </div>
+            )
+        }
+
+        if (!url) return null;
+
+        const isImage = url.toLowerCase().match(/\.(jpg|jpeg|png|gif|webp)/) || 
+                       (name && name.toLowerCase().match(/\.(jpg|jpeg|png|gif|webp)$/)) ||
+                       url.includes('image');
+
+        return (
+            <div className="mt-2 p-2 border rounded bg-gray-50 flex items-center gap-3 shadow-sm border-blue-100">
+                {isImage ? (
+                    <div className="w-12 h-12 rounded border overflow-hidden bg-white shrink-0 shadow-inner">
+                        <img src={url} alt="Preview" className="w-full h-full object-cover" />
+                    </div>
+                ) : (
+                    <div className="w-12 h-12 rounded border bg-white flex items-center justify-center shrink-0 shadow-inner">
+                        <svg className="w-8 h-8 text-red-500" fill="currentColor" viewBox="0 0 20 20"><path d="M4 4a2 2 0 012-2h4.586A2 2 0 0112 2.586L15.414 6A2 2 0 0116 7.414V16a2 2 0 01-2 2H6a2 2 0 01-2-2V4z"/></svg>
+                    </div>
+                )}
+                <div className="flex-1 min-w-0">
+                    <p className="text-[10px] font-bold text-gray-400 uppercase tracking-wider leading-none mb-1">Uploaded Attachment</p>
+                    <p className="text-xs font-semibold text-gray-700 truncate">{name || 'File Attached'}</p>
+                    <a href={url} target="_blank" rel="noopener noreferrer" className="text-blue-600 hover:text-blue-800 hover:underline text-xs font-bold flex items-center gap-1 mt-1 transition-colors">
+                        <svg className="w-3 h-3" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M10 6H6a2 2 0 00-2 2v10a2 2 0 002 2h10a2 2 0 002-2v-4M14 4h6m0 0v6m0-6L10 14" /></svg>
+                        View Full File
+                    </a>
+                </div>
+            </div>
+        )
+    }
+
     const renderPhaseHeader = (phaseNum: number, title: string) => {
         const pStatus = phaseStatuses[phaseNum];
         let statusColor: string = 'bg-gray-400';
@@ -810,8 +1032,8 @@ export const JobCardForm: React.FC<JobCardFormProps> = ({ onClose, initialData, 
                 <div className="flex justify-between items-center p-6 border-b bg-white rounded-t-lg sticky top-0 z-10 shadow-sm">
                     <h2 className="text-xl font-bold text-gray-800">
                         {activeDocId ? `Job Card: ${jobCardNo}` : 'Create New Job Card'}
-                        <span className={`ml-3 text-sm px-2 py-1 rounded inline-block translate-y-[-2px] ${status === 'Completed' ? 'bg-green-100 text-green-800' :
-                            status === 'Cancelled' ? 'bg-red-100 text-red-800' :
+                        <span className={`ml-3 text-sm px-2 py-1 rounded inline-block translate-y-[-2px] ${status?.toLowerCase() === 'completed' ? 'bg-green-100 text-green-800' :
+                            status?.toLowerCase() === 'cancelled' ? 'bg-red-100 text-red-800' :
                                 'bg-yellow-100 text-yellow-800'
                             }`}>
                             {status}
@@ -836,6 +1058,7 @@ export const JobCardForm: React.FC<JobCardFormProps> = ({ onClose, initialData, 
                                             requirements,
                                             otherSpecs,
                                             phase2Data: {
+                                                ...phase2Data,
                                                 comments: phase2Data.comments || '',
                                                 prePressChecklist: phase2Data.prePressChecklist || {},
                                                 ...(phase2Data.marketingManagerSignature ? { marketingManagerSignature: true } : {})
@@ -867,9 +1090,11 @@ export const JobCardForm: React.FC<JobCardFormProps> = ({ onClose, initialData, 
                                 </svg>
                             </button>
                         )}
-                        <button onClick={handleSaveOnly} disabled={loading} className="bg-blue-600 hover:bg-blue-700 text-white px-4 py-2 rounded shadow font-bold text-sm transition">
-                            Save Only
-                        </button>
+                        {(status?.toLowerCase() !== 'completed' || ['admin', 'marketing_manager'].includes(user?.role || '')) && (
+                            <button onClick={handleSaveOnly} disabled={loading} className="bg-blue-600 hover:bg-blue-700 text-white px-4 py-2 rounded shadow font-bold text-sm transition">
+                                Save Only
+                            </button>
+                        )}
                         <button onClick={onClose} className="text-gray-500 hover:text-gray-700">
                             <svg className="w-6 h-6" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M6 18L18 6M6 6l12 12" /></svg>
                         </button>
@@ -1025,6 +1250,32 @@ export const JobCardForm: React.FC<JobCardFormProps> = ({ onClose, initialData, 
                                                         )}
                                                     </div>
                                                 </div>
+                                                <div className="col-span-2 mt-4">
+                                                    <label className="block text-xs font-bold text-gray-700 mb-1">PO Hard Copy (PDF, PNG, JPG)</label>
+                                                    <div className="flex flex-col gap-1">
+                                                        <input 
+                                                            type="file" 
+                                                            accept=".pdf,.png,.jpg,.jpeg" 
+                                                            onChange={(e) => handleFileUpload(e, 'po_files', 'poFileUrl', setCustomerData)}
+                                                            disabled={!canEditPhase(1)}
+                                                            className="text-xs border rounded p-1 w-full bg-white disabled:bg-gray-50 focus:ring-1 focus:ring-blue-400 outline-none"
+                                                        />
+                                                        {renderFilePreview(customerData.poFileUrl, customerData.poFileName, 'poFileUrl')}
+                                                    </div>
+                                                </div>
+                                                <div className="col-span-2 mt-4">
+                                                    <label className="block text-xs font-bold text-gray-700 mb-1">Sample File (In Phase 1)</label>
+                                                    <div className="flex flex-col gap-1">
+                                                        <input 
+                                                            type="file" 
+                                                            accept=".pdf,.png,.jpg,.jpeg" 
+                                                            onChange={(e) => handleFileUpload(e, 'sample_files', 'sampleFileUrl', setCustomerData)}
+                                                            disabled={!canEditPhase(1)}
+                                                            className="text-xs border rounded p-1 w-full bg-white disabled:bg-gray-50 focus:ring-1 focus:ring-blue-400 outline-none"
+                                                        />
+                                                        {renderFilePreview(customerData.sampleFileUrl, customerData.sampleFileName, 'sampleFileUrl')}
+                                                    </div>
+                                                </div>
                                             </div>
                                         </div>
 
@@ -1059,7 +1310,7 @@ export const JobCardForm: React.FC<JobCardFormProps> = ({ onClose, initialData, 
                                                     <div>
                                                         <h5 className="font-bold text-sm text-gray-700 mb-4 border-b pb-1">Title Page (For {requirements.categoryName})</h5>
                                                         <div className="space-y-2">
-                                                            {['gsm', 'materialType', 'noOfColours', 'lamination', 'coating', 'texture', 'uvDripOff', 'embossing', 'foiling', 'binding'].map(field => (
+                                                            {['gsm', 'materialType', 'printingType', 'noOfColours', 'lamination', 'coating', 'texture', 'uvDripOff', 'embossing', 'foiling', 'binding'].map(field => (
                                                                 <div key={field} className="grid grid-cols-2 items-center gap-2">
                                                                     <label className="text-xs text-gray-600 capitalize">{field.replace(/([A-Z])/g, ' $1').trim()}</label>
                                                                     {field === 'materialType' ? (
@@ -1076,6 +1327,20 @@ export const JobCardForm: React.FC<JobCardFormProps> = ({ onClose, initialData, 
                                                                             {MATERIAL_TYPES.map(mat => (
                                                                                 <option key={mat} value={mat}>{mat}</option>
                                                                             ))}
+                                                                        </select>
+                                                                    ) : field === 'printingType' ? (
+                                                                        <select
+                                                                            value={requirements.titlePage[field as keyof typeof requirements.titlePage]}
+                                                                            onChange={e => setRequirements({
+                                                                                ...requirements,
+                                                                                titlePage: { ...requirements.titlePage, [field]: e.target.value }
+                                                                            })}
+                                                                            disabled={!canEditPhase(1)}
+                                                                            className="border rounded px-2 py-1 text-sm disabled:bg-gray-50 w-full"
+                                                                        >
+                                                                            <option value="">Select Printing</option>
+                                                                            <option value="Single side">Single side</option>
+                                                                            <option value="Double side (Lot-pot)">Double side (Lot-pot)</option>
                                                                         </select>
                                                                     ) : (
                                                                         <input
@@ -1099,7 +1364,7 @@ export const JobCardForm: React.FC<JobCardFormProps> = ({ onClose, initialData, 
                                                         <div>
                                                             <h5 className="font-bold text-sm text-gray-700 mb-3 border-b pb-1">Inner Pages (For {requirements.categoryName})</h5>
                                                             <div className="space-y-2">
-                                                                {['gsm', 'materialType', 'noOfColours', 'lamination', 'coating', 'texture', 'uvDripOff', 'embossing', 'foiling', 'binding'].map(field => (
+                                                                {['gsm', 'materialType', 'printingType', 'noOfColours', 'lamination', 'coating', 'texture', 'uvDripOff', 'embossing', 'foiling', 'binding'].map(field => (
                                                                     <div key={field} className="grid grid-cols-2 items-center gap-2">
                                                                         <label className="text-xs text-gray-600 capitalize">{field.replace(/([A-Z])/g, ' $1').trim()}</label>
                                                                         {field === 'materialType' ? (
@@ -1116,6 +1381,20 @@ export const JobCardForm: React.FC<JobCardFormProps> = ({ onClose, initialData, 
                                                                                 {MATERIAL_TYPES.map(mat => (
                                                                                     <option key={mat} value={mat}>{mat}</option>
                                                                                 ))}
+                                                                            </select>
+                                                                        ) : field === 'printingType' ? (
+                                                                            <select
+                                                                                value={requirements.innerPages[field as keyof typeof requirements.innerPages]}
+                                                                                onChange={e => setRequirements({
+                                                                                    ...requirements,
+                                                                                    innerPages: { ...requirements.innerPages, [field]: e.target.value }
+                                                                                })}
+                                                                                disabled={!canEditPhase(1)}
+                                                                                className="border rounded px-2 py-1 text-sm disabled:bg-gray-50 w-full"
+                                                                            >
+                                                                                <option value="">Select Printing</option>
+                                                                                <option value="Single side">Single side</option>
+                                                                                <option value="Double side (Lot-pot)">Double side (Lot-pot)</option>
                                                                             </select>
                                                                         ) : (
                                                                             <input
@@ -1188,7 +1467,9 @@ export const JobCardForm: React.FC<JobCardFormProps> = ({ onClose, initialData, 
                             {activeTab === 2 && (
                                 <div className="p-6 border-t border-gray-200">
                                     {!isPhaseUnlocked(2) ? (
-                                        <p className="text-gray-500 italic">This phase is locked. Phase 1 must be completed first.</p>
+                                        <p className="text-gray-500 italic">
+                                            This phase is locked. {phaseStatuses[1] === 'completed' ? 'Marketing Manager approval for Phase 1 is required.' : 'Phase 1 must be completed first.'}
+                                        </p>
                                     ) : (
                                         <div className="space-y-4">
                                             <div className="grid grid-cols-2 gap-4">
@@ -1220,9 +1501,34 @@ export const JobCardForm: React.FC<JobCardFormProps> = ({ onClose, initialData, 
                                                     <label className="block text-xs font-bold text-gray-700 mb-1">Ups</label>
                                                     <input type="text" value={phase2Data.ups} onChange={e => setPhase2Data({ ...phase2Data, ups: e.target.value })} disabled={!canEditPhase(2)} className="w-full border rounded p-2 text-sm disabled:bg-gray-50" />
                                                 </div>
-                                                <div>
+                                                <div className="col-span-1">
                                                     <label className="block text-xs font-bold text-gray-700 mb-1">Sheet Size</label>
-                                                    <input type="text" value={phase2Data.sheetSize} onChange={e => setPhase2Data({ ...phase2Data, sheetSize: e.target.value })} disabled={!canEditPhase(2)} className="w-full border rounded p-2 text-sm disabled:bg-gray-50" />
+                                                    <div className="grid grid-cols-3 gap-1">
+                                                        <input 
+                                                            type="text" 
+                                                            placeholder="L" 
+                                                            value={phase2Data.sheetSizeL || ''} 
+                                                            onChange={e => setPhase2Data({ ...phase2Data, sheetSizeL: e.target.value })} 
+                                                            disabled={!canEditPhase(2)} 
+                                                            className="w-full border rounded p-2 text-sm disabled:bg-gray-50" 
+                                                        />
+                                                        <input 
+                                                            type="text" 
+                                                            placeholder="W" 
+                                                            value={phase2Data.sheetSizeW || ''} 
+                                                            onChange={e => setPhase2Data({ ...phase2Data, sheetSizeW: e.target.value })} 
+                                                            disabled={!canEditPhase(2)} 
+                                                            className="w-full border rounded p-2 text-sm disabled:bg-gray-50" 
+                                                        />
+                                                        <input 
+                                                            type="text" 
+                                                            placeholder="GSM" 
+                                                            value={phase2Data.sheetSizeGsm || ''} 
+                                                            onChange={e => setPhase2Data({ ...phase2Data, sheetSizeGsm: e.target.value })} 
+                                                            disabled={!canEditPhase(2)} 
+                                                            className="w-full border rounded p-2 text-sm disabled:bg-gray-50" 
+                                                        />
+                                                    </div>
                                                 </div>
                                                 <div>
                                                     <label className="block text-xs font-bold text-gray-700 mb-1">Finished Size</label>
@@ -1236,6 +1542,19 @@ export const JobCardForm: React.FC<JobCardFormProps> = ({ onClose, initialData, 
                                                     <label className="block text-xs font-bold text-gray-700 mb-1">Digital Dummy</label>
                                                     <input type="text" value={phase2Data.digitalDummy} onChange={e => setPhase2Data({ ...phase2Data, digitalDummy: e.target.value })} disabled={!canEditPhase(2)} className="w-full border rounded p-2 text-sm disabled:bg-gray-50" />
                                                 </div>
+                                                <div className="col-span-full">
+                                                    <label className="block text-xs font-bold text-gray-700 mb-1">Sample File (In Phase 2)</label>
+                                                    <div className="flex flex-col gap-1">
+                                                        <input 
+                                                            type="file" 
+                                                            accept=".pdf,.png,.jpg,.jpeg" 
+                                                            onChange={(e) => handleFileUpload(e, 'sample_files', 'sampleFileUrl', setPhase2Data)}
+                                                            disabled={!canEditPhase(2)}
+                                                            className="text-xs border rounded p-1 w-full bg-white disabled:bg-gray-50 focus:ring-1 focus:ring-blue-400 outline-none"
+                                                        />
+                                                        {renderFilePreview(phase2Data.sampleFileUrl, phase2Data.sampleFileName, 'sampleFileUrl')}
+                                                    </div>
+                                                </div>
                                                 <div>
                                                     <label className="block text-xs font-bold text-gray-700 mb-1">Phase 2 Comments</label>
                                                     <textarea
@@ -1247,31 +1566,6 @@ export const JobCardForm: React.FC<JobCardFormProps> = ({ onClose, initialData, 
                                                     />
                                                 </div>
                                             </div>
-
-                                            {/* Status Message for Phase 3 Unlocking */}
-                                            {phaseStatuses[2] === 'completed' && !phase2Data.marketingManagerSignature && (
-                                                <div className="mt-4 bg-yellow-50 border border-yellow-200 text-yellow-800 p-3 rounded flex items-center justify-between shadow-sm">
-                                                    <div className="flex items-center gap-2">
-                                                        <svg className="w-5 h-5" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M12 9v2m0 4h.01m-6.938 4h13.856c1.54 0 2.502-1.667 1.732-3L13.732 4c-.77-1.333-2.694-1.333-3.464 0L3.34 16c-.77 1.333.192 3 1.732 3z" /></svg>
-                                                        <span className="text-sm font-medium">Waiting for Marketing Manager approval before Phase 3 can begin.</span>
-                                                    </div>
-                                                    {user?.role === 'marketing_manager' && (
-                                                        <button
-                                                            onClick={() => setIsMarketingApprovalModalOpen(true)}
-                                                            disabled={loading}
-                                                            className="bg-yellow-600 hover:bg-yellow-700 text-white px-4 py-1.5 rounded shadow text-sm font-bold transition disabled:opacity-50"
-                                                        >
-                                                            Approve Phase 2
-                                                        </button>
-                                                    )}
-                                                </div>
-                                            )}
-                                            {phase2Data.marketingManagerSignature && (
-                                                <div className="mt-4 bg-green-50 border border-green-200 text-green-800 p-3 rounded flex items-center gap-2 shadow-sm">
-                                                    <svg className="w-5 h-5" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M9 12l2 2 4-4m6 2a9 9 0 11-18 0 9 9 0 0118 0z" /></svg>
-                                                    <span className="text-sm font-medium">Approved by Marketing Manager</span>
-                                                </div>
-                                            )}
 
                                             {canEditPhase(2) && (
                                                 <div className="flex justify-end mt-4 border-t pt-4">
@@ -1380,20 +1674,46 @@ export const JobCardForm: React.FC<JobCardFormProps> = ({ onClose, initialData, 
                                                     </tbody>
                                                 </table>
                                             </div>
-                                            <div className="mt-4 border rounded p-4 bg-white shadow-sm">
-                                                <label className="block text-xs font-bold text-gray-700 mb-1">Phase 4 Comments</label>
+                                            <div className="mt-4 border-t pt-4">
+                                                <label className="block text-xs font-bold text-gray-700 mb-1">Phase 1 Comments</label>
                                                 <textarea
-                                                    value={phase4Data.comments}
-                                                    onChange={e => setPhase4Data({ ...phase4Data, comments: e.target.value })}
-                                                    disabled={!canEditPhase(4)}
+                                                    value={customerData.comments}
+                                                    onChange={e => setCustomerData({ ...customerData, comments: e.target.value })}
+                                                    disabled={!canEditPhase(1)}
                                                     className="w-full border rounded p-2 text-sm disabled:bg-gray-50 h-20 resize-none"
-                                                    placeholder="Add comments for Phase 4..."
+                                                    placeholder="Add comments for Phase 1..."
                                                 />
                                             </div>
-                                            {canEditPhase(4) && (
+
+                                            {/* Status Message for Phase 1 Approval */}
+                                            {phaseStatuses[1] === 'completed' && !customerData.marketingManagerSignature && (
+                                                <div className="mt-4 bg-yellow-50 border border-yellow-200 text-yellow-800 p-3 rounded flex items-center justify-between shadow-sm">
+                                                    <div className="flex items-center gap-2">
+                                                        <svg className="w-5 h-5" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M12 9v2m0 4h.01m-6.938 4h13.856c1.54 0 2.502-1.667 1.732-3L13.732 4c-.77-1.333-2.694-1.333-3.464 0L3.34 16c-.77 1.333.192 3 1.732 3z" /></svg>
+                                                        <span className="text-sm font-medium">Waiting for Marketing Manager approval before Phase 2 can begin.</span>
+                                                    </div>
+                                                    {user?.role === 'marketing_manager' && (
+                                                        <button
+                                                            onClick={() => setIsMarketingApprovalModalOpen(true)}
+                                                            disabled={loading}
+                                                            className="bg-yellow-600 hover:bg-yellow-700 text-white px-4 py-1.5 rounded shadow text-sm font-bold transition disabled:opacity-50"
+                                                        >
+                                                            Approve Phase 1
+                                                        </button>
+                                                    )}
+                                                </div>
+                                            )}
+                                            {customerData.marketingManagerSignature && (
+                                                <div className="mt-4 bg-green-50 border border-green-200 text-green-800 p-3 rounded flex items-center gap-2 shadow-sm">
+                                                    <svg className="w-5 h-5" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M9 12l2 2 4-4m6 2a9 9 0 11-18 0 9 9 0 0118 0z" /></svg>
+                                                    <span className="text-sm font-medium">Approved by Marketing Manager</span>
+                                                </div>
+                                            )}
+
+                                            {canEditPhase(1) && (
                                                 <div className="flex justify-end mt-4 border-t pt-4">
-                                                    <button onClick={() => triggerConfirm(4)} disabled={loading} className="bg-green-600 hover:bg-green-700 text-white px-6 py-2 rounded shadow font-bold text-sm transition disabled:opacity-50">
-                                                        {phaseStatuses[4] === 'completed' ? 'Update & Confirm Phase 4' : 'Confirm Phase 4'}
+                                                    <button onClick={() => triggerConfirm(1)} disabled={loading} className="bg-green-600 hover:bg-green-700 text-white px-6 py-2 rounded shadow font-bold text-sm transition disabled:opacity-50">
+                                                        {phaseStatuses[1] === 'completed' ? 'Update & Confirm Phase 1' : 'Confirm Phase 1'}
                                                     </button>
                                                 </div>
                                             )}
@@ -1512,7 +1832,16 @@ export const JobCardForm: React.FC<JobCardFormProps> = ({ onClose, initialData, 
                                                             </div>
                                                             <div>
                                                                 <label className="block text-[10px] uppercase font-bold text-gray-500 mb-1">Machine</label>
-                                                                <input type="text" value={newProductionLog.machine} onChange={e => setNewProductionLog({ ...newProductionLog, machine: e.target.value })} className="w-full border rounded p-1.5 text-xs bg-white" placeholder="Machine" />
+                                                                <select
+                                                                    value={newProductionLog.machine}
+                                                                    onChange={e => setNewProductionLog({ ...newProductionLog, machine: e.target.value })}
+                                                                    className="w-full border rounded p-1.5 text-xs bg-white"
+                                                                >
+                                                                    <option value="">Select Machine</option>
+                                                                    {PRODUCTION_MACHINES.map(m => (
+                                                                        <option key={m} value={m}>{m}</option>
+                                                                    ))}
+                                                                </select>
                                                             </div>
                                                             <div>
                                                                 <label className="block text-[10px] uppercase font-bold text-gray-500 mb-1">Shift</label>
@@ -1601,13 +1930,14 @@ export const JobCardForm: React.FC<JobCardFormProps> = ({ onClose, initialData, 
                                                                 <th className="px-2 py-2">FG</th>
                                                                 <th className="px-2 py-2">Binding</th>
                                                                 <th className="px-2 py-2">Packing</th>
+                                                                <th className="px-2 py-2">Attachment</th>
                                                                 <th className="px-2 py-2 w-8"></th>
                                                             </tr>
                                                         </thead>
                                                         <tbody className="divide-y divide-gray-100">
                                                             {(!phase6Data.qcLogs || phase6Data.qcLogs.length === 0) ? (
                                                                 <tr>
-                                                                    <td colSpan={8} className="px-3 py-4 text-center text-gray-400 italic">No quality check logs recorded yet.</td>
+                                                                    <td colSpan={9} className="px-3 py-4 text-center text-gray-400 italic">No quality check logs recorded yet.</td>
                                                                 </tr>
                                                             ) : (
                                                                 phase6Data.qcLogs.map((log: any) => (
@@ -1619,6 +1949,14 @@ export const JobCardForm: React.FC<JobCardFormProps> = ({ onClose, initialData, 
                                                                         <td className="px-2 py-2 font-semibold text-blue-600">{log.fg}</td>
                                                                         <td className="px-2 py-2">{log.binding}</td>
                                                                         <td className="px-2 py-2">{log.packing}</td>
+                                                                        <td className="px-2 py-1">
+                                                                            {log.fileUrl ? (
+                                                                                <a href={log.fileUrl} target="_blank" rel="noopener noreferrer" className="text-blue-600 hover:underline flex items-center gap-1 font-semibold overflow-hidden whitespace-nowrap">
+                                                                                    <svg className="w-3 h-3 shrink-0" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M15.172 7l-6.586 6.586a2 2 0 102.828 2.828l6.414-6.586a4 4 0 00-5.656-5.656l-6.415 6.585a6 6 0 108.486 8.486L20.5 13" /></svg>
+                                                                                    <span className="truncate max-w-[80px]" title={log.fileName || 'View Attachment'}>{log.fileName || 'View'}</span>
+                                                                                </a>
+                                                                            ) : '-'}
+                                                                        </td>
                                                                         <td className="px-2 py-2">
                                                                             {canEditPhase(6) && (
                                                                                 <button onClick={() => deleteQCLog(log.id)} className="text-red-400 hover:text-red-600 shrink-0">
@@ -1666,6 +2004,35 @@ export const JobCardForm: React.FC<JobCardFormProps> = ({ onClose, initialData, 
                                                             <div>
                                                                 <label className="block text-[10px] uppercase font-bold text-gray-500 mb-1">Packing</label>
                                                                 <input type="text" value={newQCLog.packing} onChange={e => setNewQCLog({ ...newQCLog, packing: e.target.value })} className="w-full border rounded p-1 text-xs bg-white" placeholder="Entry" />
+                                                            </div>
+                                                            <div className="flex flex-col">
+                                                                <label className="block text-[10px] uppercase font-bold text-gray-500 mb-1">Log Sample (Photo/PDF)</label>
+                                                                <div className="flex gap-2 items-center">
+                                                                    <label className={`flex items-center justify-center gap-1 px-2 py-1 bg-white border border-dashed rounded text-[10px] font-bold cursor-pointer transition ${fieldLoading.qcSampleUrl ? 'opacity-50 cursor-not-allowed border-blue-400' : 'hover:border-blue-500 hover:bg-blue-50 border-gray-300'}`}>
+                                                                        <svg className={`w-3 h-3 ${fieldLoading.qcSampleUrl ? 'animate-spin' : ''}`} fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                                                                            {fieldLoading.qcSampleUrl ? (
+                                                                                <path className="opacity-75" fill="currentColor" d="M4 12a8 8 0 018-8V0C5.373 0 0 5.373 0 12h4zm2 5.291A7.962 7.962 0 014 12H0c0 3.042 1.135 5.824 3 7.938l3-2.647z" />
+                                                                            ) : (
+                                                                                <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M4 16v1a2 2 0 002 2h12a2 2 0 002-2v-1m-4-8l-4-4m0 0L8 8m4-4v12" />
+                                                                            )}
+                                                                        </svg>
+                                                                        {fieldLoading.qcSampleUrl ? 'Uploading...' : newQCLog.fileUrl ? 'Change' : 'Upload'}
+                                                                        <input
+                                                                            type="file"
+                                                                            className="hidden"
+                                                                            onChange={(e) => handleFileUpload(e, 'qc_samples', 'fileUrl', setNewQCLog)}
+                                                                            disabled={fieldLoading.qcSampleUrl}
+                                                                            accept=".pdf,image/png,image/jpeg,image/jpg"
+                                                                        />
+                                                                    </label>
+                                                                    {newQCLog.fileUrl && (
+                                                                        <div className="flex items-center gap-1 min-w-0 flex-1">
+                                                                            <svg className="w-3 h-3 text-green-500 shrink-0" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M5 13l4 4L19 7" /></svg>
+                                                                            <span className="text-[10px] text-gray-500 truncate" title={newQCLog.fileName}>{newQCLog.fileName}</span>
+                                                                            <button onClick={() => setNewQCLog({ ...newQCLog, fileUrl: '', fileName: '' })} className="text-red-500 hover:text-red-700 font-bold text-[10px] ml-auto shrink-0">×</button>
+                                                                        </div>
+                                                                    )}
+                                                                </div>
                                                             </div>
                                                             <button
                                                                 onClick={addQCLog}
@@ -1788,52 +2155,51 @@ export const JobCardForm: React.FC<JobCardFormProps> = ({ onClose, initialData, 
                                             <p className="text-gray-500 italic">This phase is locked. Phase 7 must be completed first.</p>
                                         ) : (
                                             <div className="space-y-4">
-                                                <div className="grid grid-cols-3 gap-4">
-                                                    <div className="bg-blue-50 p-3 rounded border border-blue-100">
-                                                        <label className="block text-xs font-bold text-blue-700 mb-1">Allowed Wastage (Qty)</label>
-                                                        <div className="text-lg font-bold">{phase5Data.allowedWastage || '0'}</div>
-                                                    </div>
-                                                    <div className="bg-green-50 p-3 rounded border border-green-100">
-                                                        <label className="block text-xs font-bold text-green-700 mb-1">Actual Wastage (Qty)</label>
-                                                        <div className="text-lg font-bold">
-                                                            {(phase5Data.productionLogs || []).reduce((sum: number, log: any) => sum + Number(log.waste || 0), 0)}
-                                                        </div>
-                                                    </div>
-                                                    <div className="bg-red-50 p-3 rounded border border-red-100">
-                                                        <label className="block text-xs font-bold text-red-700 mb-1">Excess Wastage (Qty)</label>
-                                                        <div className="text-lg font-bold">
-                                                            {Math.max(0, (phase5Data.productionLogs || []).reduce((sum: number, log: any) => sum + Number(log.waste || 0), 0) - Number(phase5Data.allowedWastage || 0))}
-                                                        </div>
-                                                    </div>
-                                                </div>
+                                                {(() => {
+                                                    const totalActualWastage = (phase5Data.productionLogs || []).reduce((sum: number, log: any) => sum + Number(log.waste || 0), 0);
+                                                    const allowedWastage = Number(phase5Data.allowedWastage || 0);
+                                                    const excessWastage = Math.max(0, totalActualWastage - allowedWastage);
+                                                    const excessWastagePercent = allowedWastage > 0 ? ((excessWastage / allowedWastage) * 100).toFixed(2) : '0.00';
 
-                                                <div className="grid grid-cols-2 gap-4 mt-4">
-                                                    <div>
-                                                        <label className="block text-xs font-bold text-gray-700 mb-1">Actual Waste %</label>
-                                                        <input type="text" value={phase8Data.actualWastePercent} onChange={e => setPhase8Data({ ...phase8Data, actualWastePercent: e.target.value })} disabled={!canEditPhase(8)} className="w-full border rounded p-2 text-sm disabled:bg-gray-50" />
-                                                    </div>
-                                                    <div>
-                                                        <label className="block text-xs font-bold text-gray-700 mb-1">Excess Waste %</label>
-                                                        <input type="text" value={phase8Data.excessWastePercent} onChange={e => setPhase8Data({ ...phase8Data, excessWastePercent: e.target.value })} disabled={!canEditPhase(8)} className="w-full border rounded p-2 text-sm disabled:bg-gray-50" />
-                                                    </div>
-                                                    {Math.max(0, (phase5Data.productionLogs || []).reduce((sum: number, log: any) => sum + Number(log.waste || 0), 0) - Number(phase5Data.allowedWastage || 0)) > 0 && (
-                                                        <div className="col-span-2">
-                                                            <label className="block text-xs font-bold text-red-700 mb-1">Root Cause (Compulsory for Excess Wastage)</label>
-                                                            <textarea
-                                                                value={phase8Data.rootCause}
-                                                                onChange={e => setPhase8Data({ ...phase8Data, rootCause: e.target.value })}
-                                                                disabled={!canEditPhase(8)}
-                                                                className="w-full border border-red-200 rounded p-2 text-sm focus:ring-red-200"
-                                                                rows={2}
-                                                                placeholder="Please enter the root cause for excess wastage..."
-                                                            ></textarea>
-                                                        </div>
-                                                    )}
-                                                    <div className="col-span-2">
-                                                        <label className="block text-xs font-bold text-gray-700 mb-1">CAPA (Corrective Action)</label>
-                                                        <textarea value={phase8Data.capa} onChange={e => setPhase8Data({ ...phase8Data, capa: e.target.value })} disabled={!canEditPhase(8)} className="w-full border rounded p-2 text-sm disabled:bg-gray-50" rows={2}></textarea>
-                                                    </div>
-                                                </div>
+                                                    return (
+                                                        <>
+                                                            <div className="grid grid-cols-3 gap-4">
+                                                                <div className="bg-blue-50 p-3 rounded border border-blue-100">
+                                                                    <label className="block text-xs font-bold text-blue-700 mb-1">Allowed Wastage (Qty)</label>
+                                                                    <div className="text-lg font-bold">{allowedWastage}</div>
+                                                                </div>
+                                                                <div className="bg-green-50 p-3 rounded border border-green-100">
+                                                                    <label className="block text-xs font-bold text-green-700 mb-1">Actual Wastage (Qty)</label>
+                                                                    <div className="text-lg font-bold">{totalActualWastage}</div>
+                                                                </div>
+                                                                <div className={`${excessWastage > 0 ? 'bg-red-50 border-red-100' : 'bg-gray-50 border-gray-200'} p-3 rounded border`}>
+                                                                    <label className={`block text-xs font-bold ${excessWastage > 0 ? 'text-red-700' : 'text-gray-700'} mb-1`}>Excess Wastage (%)</label>
+                                                                    <div className={`text-lg font-bold ${excessWastage > 0 ? 'text-red-800' : 'text-gray-800'}`}>{excessWastagePercent}%</div>
+                                                                </div>
+                                                            </div>
+
+                                                            <div className="space-y-4 mt-4">
+                                                                {excessWastage > 0 && (
+                                                                    <div className="col-span-2">
+                                                                        <label className="block text-xs font-bold text-red-700 mb-1">Root Cause (Compulsory for Excess Wastage)</label>
+                                                                        <textarea
+                                                                            value={phase8Data.rootCause}
+                                                                            onChange={e => setPhase8Data({ ...phase8Data, rootCause: e.target.value })}
+                                                                            disabled={!canEditPhase(8)}
+                                                                            className="w-full border border-red-200 rounded p-2 text-sm focus:ring-red-200"
+                                                                            rows={2}
+                                                                            placeholder="Please enter the root cause for excess wastage..."
+                                                                        ></textarea>
+                                                                    </div>
+                                                                )}
+                                                                <div className="col-span-2">
+                                                                    <label className="block text-xs font-bold text-gray-700 mb-1">CAPA (Corrective Action)</label>
+                                                                    <textarea value={phase8Data.capa} onChange={e => setPhase8Data({ ...phase8Data, capa: e.target.value })} disabled={!canEditPhase(8)} className="w-full border rounded p-2 text-sm disabled:bg-gray-50" rows={2}></textarea>
+                                                                </div>
+                                                            </div>
+                                                        </>
+                                                    );
+                                                })()}
                                                 <div className="mt-4 border-t pt-4">
                                                     <h5 className="font-bold text-sm text-gray-700 mb-2">Signatures (Digital Check-off)</h5>
                                                     <div className="flex gap-6">
@@ -1918,11 +2284,11 @@ export const JobCardForm: React.FC<JobCardFormProps> = ({ onClose, initialData, 
                 {/* Marketing Manager Approval Modal */}
                 <ConfirmationModal
                     isOpen={isMarketingApprovalModalOpen}
-                    title="Approve Phase 2"
-                    message={`Are you sure you want to approve Phase 2 for Job Card ${jobCardNo}? This will unlock Phase 3 for the Procurement team.`}
+                    title="Approve Phase 1"
+                    message={`Are you sure you want to approve Phase 1 for Job Card ${jobCardNo}? This will unlock Phase 2 for the Pre-Press team.`}
                     onConfirm={handleMarketingManagerApproval}
                     onCancel={() => setIsMarketingApprovalModalOpen(false)}
-                    confirmText={loading ? "Approving..." : "Approve Phase 2"}
+                    confirmText={loading ? "Approving..." : "Approve Phase 1"}
                     isDangerous={false}
                 />
             </div>

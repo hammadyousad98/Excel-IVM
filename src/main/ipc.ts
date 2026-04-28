@@ -200,4 +200,61 @@ export function registerIpcHandlers(): void {
     ipcMain.on('show-notification', (_event, { title, body, jobCardId, targetPhase }) => {
         showSystemNotification(title, body, jobCardId, targetPhase)
     })
+
+    // Cloudinary Secure Signed Upload (Main Process)
+    safeHandle('upload-to-cloudinary', async (_event, { filePath, folder }) => {
+        const cloudName = "dwbhfwfne";
+        const apiKey = "839159796393743";
+        const apiSecret = "4zl-nPkutou_Nwr3NQ0Hx3W9SnY";
+        
+        console.log(`[Main] Starting secure Cloudinary upload for: ${path.basename(filePath)}`);
+        
+        try {
+            const timestamp = Math.round(new Date().getTime() / 1000);
+            const fileBuffer = fs.readFileSync(filePath);
+            
+            // To do a signed upload, we need to sign specific parameters
+            // These must be in alphabetical order for the signature
+            const paramsToSign: any = {
+                folder: folder,
+                timestamp: timestamp
+            };
+
+            const signatureString = Object.keys(paramsToSign)
+                .sort()
+                .map(key => `${key}=${paramsToSign[key]}`)
+                .join('&') + apiSecret;
+
+            const crypto = require('crypto');
+            const signature = crypto.createHash('sha1').update(signatureString).digest('hex');
+
+            const formData = new FormData();
+            formData.append('file', new Blob([fileBuffer])); // Upload as binary blob
+            formData.append('api_key', apiKey);
+            formData.append('timestamp', timestamp.toString());
+            formData.append('signature', signature);
+            formData.append('folder', folder);
+
+            const url = `https://api.cloudinary.com/v1_1/${cloudName}/auto/upload`;
+            
+            const response = await fetch(url, {
+                method: 'POST',
+                body: formData
+            });
+
+            if (!response.ok) {
+                const errText = await response.text();
+                console.error(`[Main] Cloudinary error: ${errText}`);
+                throw new Error(`Cloudinary rejected: ${errText}`);
+            }
+
+            const data = await response.json();
+            console.log(`[Main] Cloudinary Success: ${data.secure_url}`);
+            return data;
+
+        } catch (error: any) {
+            console.error(`[Main] Upload failed: ${error.message}`);
+            throw error;
+        }
+    })
 }

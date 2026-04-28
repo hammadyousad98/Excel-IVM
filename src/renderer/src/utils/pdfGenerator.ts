@@ -290,6 +290,14 @@ export const generatePOPdf = async (
     doc.text('Grand Total:', totalsBoxX, currentTotalY)
     doc.text(formatCurrency(calculatedSubTotal + (po.tax_amount || 0) + (po.freight_amount || 0)), totalsBoxX + 55, currentTotalY, { align: 'right' })
 
+    if (po.sheet_size_mismatch) {
+        doc.setFontSize(10)
+        doc.setFont('helvetica', 'bold')
+        doc.setTextColor(200, 0, 0)
+        doc.text('* NOTE: Sheet size mismatch detected (differs from Job Card). PO requires verification/approval.', marginLeft, 270)
+        doc.setTextColor(0, 0, 0)
+    }
+
     // Signatures
     const signatureY = 280 // Moved down to add space between totals and signatures
     doc.line(marginLeft, signatureY, marginLeft + 50, signatureY)
@@ -934,21 +942,23 @@ export const generateJobCardPdf = async (
             ] : []
         ].filter(h => h.length > 0) as any,
         body: [
-            ['GSM', 'gsm'], ['Material Type', 'materialType'], ['No. of Colours', 'noOfColours'],
+            ['GSM', 'gsm'], ['Material Type', 'materialType'], ['Printing', 'printingType'], ['No. of Colours', 'noOfColours'],
             ['Lamination', 'lamination'], ['Coating', 'coating'], ['Texture', 'texture'],
             ['UV / Drip off', 'uvDripOff'], ['Embossing', 'embossing'], ['Foiling', 'foiling'], ['Binding', 'binding']
         ].map(([label, key]) => {
+            const titleValue = jobCard.requirements?.titlePage?.[key];
+            const innerValue = jobCard.requirements?.innerPages?.[key];
             if (isCatalogue) {
                 return [
                     { content: label, styles: { fontStyle: 'bold' as any, fillColor: [250, 250, 250] } },
-                    { content: jobCard.requirements?.titlePage?.[key] || '-' },
+                    { content: titleValue || '-' },
                     { content: label, styles: { fontStyle: 'bold' as any, fillColor: [250, 250, 250] } },
-                    { content: jobCard.requirements?.innerPages?.[key] || '-' }
+                    { content: innerValue || '-' }
                 ]
             } else {
                 return [
                     { content: label, styles: { fontStyle: 'bold' as any, fillColor: [250, 250, 250] } },
-                    { content: jobCard.requirements?.titlePage?.[key] || '-' }
+                    { content: titleValue || '-' }
                 ]
             }
         }),
@@ -984,7 +994,7 @@ export const generateJobCardPdf = async (
             ['Plates', jobCard.phase2Data?.plates || '-', 'Pos. UV', jobCard.phase2Data?.positiveUV || '-'],
             ['Pos. Die', jobCard.phase2Data?.positiveDie || '-', 'Pos. Foil', jobCard.phase2Data?.positiveFoil || '-'],
             ['Emboss. Pos.', jobCard.phase2Data?.embossingBlackPositive || '-', 'Shade Card', jobCard.phase2Data?.shadeCard || '-'],
-            ['Ups', jobCard.phase2Data?.ups || '-', 'Sheet Size', jobCard.phase2Data?.sheetSize || '-'],
+            ['Ups', jobCard.phase2Data?.ups || '-', 'Sheet Size', (jobCard.phase2Data?.sheetSizeL != null && jobCard.phase2Data?.sheetSizeL !== '' && jobCard.phase2Data?.sheetSizeL !== 0) || (jobCard.phase2Data?.sheetSizeW != null && jobCard.phase2Data?.sheetSizeW !== '' && jobCard.phase2Data?.sheetSizeW !== 0) ? `L: ${jobCard.phase2Data?.sheetSizeL || '-'} W: ${jobCard.phase2Data?.sheetSizeW || '-'} GSM: ${jobCard.phase2Data?.sheetSizeGsm || '-'}` : (jobCard.phase2Data?.sheetSize || '-')],
             ['Finished Size', jobCard.phase2Data?.finishedSize || '-', 'Pages', jobCard.phase2Data?.numberOfPages || '-'],
             ['Digital Dummy', jobCard.phase2Data?.digitalDummy || '-', '', '']
         ],
@@ -1098,11 +1108,11 @@ export const generateJobCardPdf = async (
     // QC Logs - Phase 6
     autoTable(doc, {
         startY: (doc as any).lastAutoTable.finalY + 5,
-        head: [[{ content: 'QUALITY CHECK LOGS', colSpan: 7, styles: { halign: 'center', fillColor: [220, 255, 240], textColor: [0, 0, 0], fontStyle: 'bold' as any } }]],
+        head: [[{ content: 'QUALITY CHECK LOGS', colSpan: 8, styles: { halign: 'center', fillColor: [220, 255, 240], textColor: [0, 0, 0], fontStyle: 'bold' as any } }]],
         body: [
-            ['UV', 'Printing', 'Die Cut', 'Lamination', 'FG', 'Binding', 'Packing'],
+            ['UV', 'Printing', 'Die Cut', 'Lamination', 'FG', 'Binding', 'Packing', 'Att.'],
             ...(jobCard.phase6Data?.qcLogs || []).map((log: any) => [
-                log.uv || '-', log.printing || '-', log.dieCutting || '-', log.lamination || '-', log.fg || '-', log.binding || '-', log.packing || '-'
+                log.uv || '-', log.printing || '-', log.dieCutting || '-', log.lamination || '-', log.fg || '-', log.binding || '-', log.packing || '-', log.fileUrl ? 'YES' : 'NO'
             ])
         ],
         theme: 'grid',
@@ -1180,10 +1190,12 @@ export const generateJobCardPdf = async (
     })
 
     // Handle Output Mode
-    if (mode === 'save') {
-        doc.save(`JobCard_${jobCard.jobCardNo}.pdf`)
+    if (mode === 'blob') {
+        return doc.output('blob')
+    } else if (mode === 'datauristring') {
+        return doc.output('datauristring')
     } else {
-        doc.autoPrint()
-        window.open(doc.output('bloburl'), '_blank')
+        // Default: save/download the PDF
+        doc.save(`JobCard_${jobCard.jobCardNo}.pdf`)
     }
 }

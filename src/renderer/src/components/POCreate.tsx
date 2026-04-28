@@ -220,6 +220,8 @@ export const POCreate: React.FC<POCreateProps> = ({ onCancel, onSuccess, initial
             setJobCards(fetchedJCs);
         });
 
+        // Derived selected job card data for validation
+
 
         // Fetch transactions for FG matching (one-shot is okay here or listener)
         if (section === 'finished_goods') {
@@ -370,6 +372,8 @@ export const POCreate: React.FC<POCreateProps> = ({ onCancel, onSuccess, initial
             });
         }
     }, [products, categories, selectedCategory, linkedPO, availablePOs, section]);
+
+    const selectedJobCard = React.useMemo(() => jobCards.find(jc => jc.id === selectedJobCardId), [jobCards, selectedJobCardId]);
 
     // Derive unique qty_per_box values per product from production history (FG only)
     const productionQtyMap = React.useMemo(() => {
@@ -749,6 +753,22 @@ export const POCreate: React.FC<POCreateProps> = ({ onCancel, onSuccess, initial
                 }
             }))
 
+            // Check for Sheet Size Mismatch (Paper & Board)
+            let sheetSizeMismatch = false;
+            if (section === 'raw_material' && selectedJobCard) {
+                processedItems.forEach(item => {
+                    if (item.category === 'PAPER & BOARD' || item.gsm > 0) {
+                        const jcL = Number(selectedJobCard.phase2Data?.sheetSizeL || 0);
+                        const jcW = Number(selectedJobCard.phase2Data?.sheetSizeW || 0);
+                        const jcGsm = Number(selectedJobCard.phase2Data?.sheetSizeGsm || 0);
+
+                        if (jcL !== item.length || jcW !== item.width || jcGsm !== item.gsm) {
+                            sheetSizeMismatch = true;
+                        }
+                    }
+                });
+            }
+
             const subtotal = processedItems.reduce((sum, item) => sum + item.line_total, 0)
             const taxAmount = enableTax ? (subtotal * (taxRate / 100)) : 0
 
@@ -826,7 +846,9 @@ export const POCreate: React.FC<POCreateProps> = ({ onCancel, onSuccess, initial
             } : {
                 grn_no: grnNo, // Only for RM
                 job_card_id: selectedJobCardId || null,
-                job_card_no: jobCards.find(jc => jc.id === selectedJobCardId)?.jobCardNo || null
+                job_card_no: selectedJobCard?.jobCardNo || null,
+                sheet_size_mismatch: sheetSizeMismatch,
+                requires_approval: sheetSizeMismatch
             };
 
             const po = {
@@ -836,7 +858,8 @@ export const POCreate: React.FC<POCreateProps> = ({ onCancel, onSuccess, initial
                 created_by: user?.username || user?.email || 'Unknown',
                 date: date,
                 // FIX: If FG and Editing, force status to 'Draft' so user must Re-Sync (Update Status)
-                status: (section === 'finished_goods' && initialData) ? 'Draft' : (initialData ? initialData.status : 'Draft'),
+                status: (section === 'finished_goods' && initialData) ? 'Draft' : 
+                        (sheetSizeMismatch ? 'Pending Approval' : (initialData ? initialData.status : 'Draft')),
                 items: processedItems,
                 grand_total: subtotal + taxAmount + (section === 'raw_material' ? (freightAmount || 0) : 0),
                 tax_rate: enableTax ? taxRate : 0,
@@ -850,6 +873,7 @@ export const POCreate: React.FC<POCreateProps> = ({ onCancel, onSuccess, initial
                 order_no: orderNo, // Save the friendly ID
                 warehouse_id: section === 'raw_material' ? selectedWarehouse : null,
                 warehouse_name: section === 'raw_material' ? warehouses.find(w => w.id === selectedWarehouse)?.name : null,
+                sheet_size_mismatch: sheetSizeMismatch,
                 ...extraFields
             }
 
@@ -1016,6 +1040,22 @@ export const POCreate: React.FC<POCreateProps> = ({ onCancel, onSuccess, initial
                             onChange={(val) => setSelectedJobCardId(val as string)}
                             placeholder={section === 'finished_goods' ? "Select Job Card" : "Select Job Card (Procurement Phase)"}
                         />
+                        {selectedJobCard && section === 'raw_material' && (
+                            <div className="mt-2 p-2 bg-yellow-50 border border-yellow-200 rounded text-xs">
+                                <span className="font-bold text-yellow-800">Required Sheet Size: </span>
+                                {(selectedJobCard.phase2Data?.sheetSizeL || selectedJobCard.phase2Data?.sheetSizeW || selectedJobCard.phase2Data?.sheetSizeGsm) ? (
+                                    <span className="font-semibold">
+                                        L: {selectedJobCard.phase2Data.sheetSizeL || '-'}, 
+                                        W: {selectedJobCard.phase2Data.sheetSizeW || '-'}, 
+                                        GSM: {selectedJobCard.phase2Data.sheetSizeGsm || '-'}
+                                    </span>
+                                ) : (
+                                    <span className="font-semibold text-gray-500 italic">
+                                        {selectedJobCard.phase2Data?.sheetSize || 'No sheet size specified in Pre-Press'}
+                                    </span>
+                                )}
+                            </div>
+                        )}
                     </div>
                 </div>
 
@@ -1290,25 +1330,40 @@ export const POCreate: React.FC<POCreateProps> = ({ onCancel, onSuccess, initial
                                                 value={item.gsm || ''} onChange={(e) => updateItem(index, 'gsm', Number(e.target.value))}
                                             />
                                             {/* Weight & Decimal Checkbox */}
-                                            <div className="flex flex-col w-24">
-                                                <input
-                                                    type="number"
-                                                    placeholder="Kg"
-                                                    className="border p-1 rounded w-full text-sm font-bold bg-blue-50 text-blue-800"
-                                                    value={item.calculated_kgs || ''}
-                                                    onChange={(e) => updateItem(index, 'calculated_kgs', Number(e.target.value))}
-                                                />
-                                                <label className="flex items-center gap-1 mt-1 cursor-pointer">
+                                                <div className="flex flex-col w-24">
                                                     <input
-                                                        type="checkbox"
-                                                        checked={item.allow_decimals !== false} // Default true
-                                                        onChange={(e) => updateItem(index, 'allow_decimals', e.target.checked)}
-                                                        className="w-3 h-3"
+                                                        type="number"
+                                                        placeholder="Kg"
+                                                        className="border p-1 rounded w-full text-sm font-bold bg-blue-50 text-blue-800"
+                                                        value={item.calculated_kgs || ''}
+                                                        onChange={(e) => updateItem(index, 'calculated_kgs', Number(e.target.value))}
                                                     />
-                                                    <span className="text-[10px] text-gray-500 leading-tight">Decimals?</span>
-                                                </label>
-                                            </div>
-                                        </>
+                                                    <label className="flex items-center gap-1 mt-1 cursor-pointer">
+                                                        <input
+                                                            type="checkbox"
+                                                            checked={item.allow_decimals !== false} // Default true
+                                                            onChange={(e) => updateItem(index, 'allow_decimals', e.target.checked)}
+                                                            className="w-3 h-3"
+                                                        />
+                                                        <span className="text-[10px] text-gray-500 leading-tight">Decimals?</span>
+                                                    </label>
+                                                </div>
+
+                                                {/* Required Reference from Job Card */}
+                                                {selectedJobCard && (
+                                                    <div className="col-span-4 mt-1 bg-yellow-50 p-1 rounded border border-yellow-200">
+                                                        <span className="text-[9px] font-bold text-yellow-700">Required: </span>
+                                                        <span className="text-[9px] text-yellow-800">
+                                                            {selectedJobCard.phase2Data?.sheetSizeL || '-'} x {selectedJobCard.phase2Data?.sheetSizeW || '-'} x {selectedJobCard.phase2Data?.sheetSizeGsm || '-'}
+                                                        </span>
+                                                        {(Number(selectedJobCard.phase2Data?.sheetSizeL) !== Number(item.length) || 
+                                                          Number(selectedJobCard.phase2Data?.sheetSizeW) !== Number(item.width) || 
+                                                          Number(selectedJobCard.phase2Data?.sheetSizeGsm) !== Number(item.gsm)) && (
+                                                            <span className="text-[9px] font-bold text-red-600 ml-2"> (Mismatch!)</span>
+                                                        )}
+                                                    </div>
+                                                )}
+                                            </>
                                     ) : (
                                         /* Spacers for Non-Paper Items */
                                         <>
