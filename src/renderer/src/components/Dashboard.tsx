@@ -216,7 +216,7 @@ export const Dashboard: React.FC<{ section?: string }> = ({ section = 'raw_mater
     const [gridApi, setGridApi] = useState<any>(null)
     const [showColManager, setShowColManager] = useState(false)
     // View Mode State
-    const [viewMode, setViewMode] = useState<'product' | 'supplier' | 'warehouse' | 'po'>(() => {
+    const [viewMode, setViewMode] = useState<'product' | 'supplier' | 'warehouse' | 'warehouse_supplier' | 'po'>(() => {
         // Optional: Persist viewMode itself? The user didn't ask, but it might be nice. 
         // For now, let's just keep it 'product' by default or latest.
         return 'product';
@@ -692,35 +692,61 @@ export const Dashboard: React.FC<{ section?: string }> = ({ section = 'raw_mater
                     key = `${po}_${productName}`;
                 }
             } else {
-                if (viewMode === 'supplier') {
+                if (viewMode === 'supplier' || viewMode === 'warehouse_supplier') {
                     const supplier = (t.manual_supplier_name || t.supplier_name || 'Unknown').toUpperCase().trim();
-                    key = `${productName}|${supplier}`;
+                    
+                    // Don't let "Stock Transfer" become its own supplier group.
+                    // Instead, try to find an existing entry for this product and use it.
+                    if (t.transaction_type === 'Transfer' || supplier === 'STOCK TRANSFER') {
+                        const existingKey = Object.keys(aggMap).find(k => k.startsWith(`${productName}|`));
+                        if (existingKey) {
+                            key = existingKey;
+                        } else {
+                            // If no supplier group exists yet, we'll use "Unknown" to avoid "Stock Transfer"
+                            key = `${productName}|UNKNOWN`;
+                        }
+                    } else {
+                        key = `${productName}|${supplier}`;
+                    }
                 }
             }
 
+            // Still prevent "Stock Transfer" from initializing a new group if it's the first transaction seen
             if (!aggMap[key]) {
-                aggMap[key] = {
-                    ...t,
-                    product_ids: new Set(),
-                    product_name: rawName,
-                    category_name: t.manual_category_name || t.category_name || '',
-                    displaySupplier: (viewMode === 'supplier' || section === 'finished_goods') ? (t.manual_supplier_name || t.supplier_name || t.customer_name) : null,
-                    opening_qty: 0,
-                    monthly_inward: 0,
-                    monthly_outward: 0,
-                    monthly_kg: 0,
-                    monthly_amount: 0,
-                    warehouse_breakdown: {} as Record<string, { opening: number, inward: number, outward: number, kg: number, amount: number }>,
-                    po_no: t.po_no || 'No PO',
-                    product_id: t.product_id || '',
-                    customer: t.manual_supplier_name || t.customer_name || t.supplier_name,
-                    category: t.manual_category_name || t.category_name,
-                    item_code: t.item_code || '',
-                    so_qty: 0,
-                    tolerance: 0,
-                    prod_qty: 0,
-                    dispatch_qty: 0
-                };
+                // Final safety for supplier-based views: don't let a Transfer create a "Stock Transfer" supplier group
+                const sName = (t.manual_supplier_name || t.supplier_name || 'Unknown').toUpperCase().trim();
+                if ((sName === 'STOCK TRANSFER' || t.transaction_type === 'Transfer') && (viewMode === 'supplier' || viewMode === 'warehouse_supplier')) {
+                    const existingProductKey = Object.keys(aggMap).find(k => k.startsWith(`${productName}|`));
+                    if (existingProductKey) {
+                        key = existingProductKey;
+                    }
+                }
+
+                // If still truly doesn't exist, initialize it
+                if (!aggMap[key]) {
+                    aggMap[key] = {
+                        ...t,
+                        product_ids: new Set(),
+                        product_name: rawName,
+                        category_name: t.manual_category_name || t.category_name || '',
+                        displaySupplier: (viewMode === 'supplier' || viewMode === 'warehouse_supplier' || section === 'finished_goods') ? (t.manual_supplier_name || t.supplier_name || t.customer_name) : null,
+                        opening_qty: 0,
+                        monthly_inward: 0,
+                        monthly_outward: 0,
+                        monthly_kg: 0,
+                        monthly_amount: 0,
+                        warehouse_breakdown: {} as Record<string, { opening: number, inward: number, outward: number, kg: number, amount: number }>,
+                        po_no: t.po_no || 'No PO',
+                        product_id: t.product_id || '',
+                        customer: t.manual_supplier_name || t.customer_name || t.supplier_name,
+                        category: t.manual_category_name || t.category_name,
+                        item_code: t.item_code || '',
+                        so_qty: 0,
+                        tolerance: 0,
+                        prod_qty: 0,
+                        dispatch_qty: 0
+                    };
+                }
             }
 
             const item = aggMap[key];
@@ -766,7 +792,7 @@ export const Dashboard: React.FC<{ section?: string }> = ({ section = 'raw_mater
 
             // --- Current Sheet Logic ---
             if (type === 'Transfer') {
-                if (viewMode === 'warehouse') {
+                if (viewMode === 'warehouse' || viewMode === 'warehouse_supplier') {
                     if (t.source_warehouse_id) {
                         const sId = t.source_warehouse_id;
                         if (!item.warehouse_breakdown[sId]) item.warehouse_breakdown[sId] = { opening: 0, inward: 0, outward: 0, kg: 0, amount: 0 };
@@ -819,6 +845,44 @@ export const Dashboard: React.FC<{ section?: string }> = ({ section = 'raw_mater
                 }
             }
         });
+        
+        // --- Merge UNKNOWN/Stock Transfer entries into real suppliers ---
+        if (viewMode === 'supplier' || viewMode === 'warehouse_supplier') {
+            const keys = Object.keys(aggMap);
+            keys.forEach(key => {
+                if (key.endsWith('|UNKNOWN') || key.endsWith('|STOCK TRANSFER')) {
+                    const prodName = key.split('|')[0];
+                    const realSupplierKey = keys.find(k => k.startsWith(`${prodName}|`) && !k.endsWith('|UNKNOWN') && !k.endsWith('|STOCK TRANSFER'));
+                    
+                    if (realSupplierKey) {
+                        const unknownData = aggMap[key];
+                        const realData = aggMap[realSupplierKey];
+                        
+                        // Merge quantities
+                        realData.opening_qty += unknownData.opening_qty;
+                        realData.monthly_inward += unknownData.monthly_inward;
+                        realData.monthly_outward += unknownData.monthly_outward;
+                        
+                        // Merge warehouse breakdown
+                        Object.entries(unknownData.warehouse_breakdown || {}).forEach(([wId, stats]: [string, any]) => {
+                            if (!realData.warehouse_breakdown[wId]) {
+                                realData.warehouse_breakdown[wId] = { opening: 0, inward: 0, outward: 0, kg: 0, amount: 0 };
+                            }
+                            const rb = realData.warehouse_breakdown[wId];
+                            rb.opening += (stats.opening || 0);
+                            rb.inward += (stats.inward || 0);
+                            rb.outward += (stats.outward || 0);
+                        });
+                        
+                        // Remove the unknown entry
+                        delete aggMap[key];
+                    } else if (aggMap[key].displaySupplier?.toUpperCase() === 'STOCK TRANSFER') {
+                         // If we couldn't find a real supplier, at least rename it to something better than "Stock Transfer"
+                         aggMap[key].displaySupplier = 'General Stock';
+                    }
+                }
+            });
+        }
 
         let processed = Object.values(aggMap).flatMap((item: any) => {
             if (section === 'finished_goods') return item;
@@ -859,13 +923,13 @@ export const Dashboard: React.FC<{ section?: string }> = ({ section = 'raw_mater
                 };
             };
 
-            if (viewMode === 'warehouse') {
+            if (viewMode === 'warehouse' || viewMode === 'warehouse_supplier') {
                 const rows: any[] = [];
                 Object.entries(item.warehouse_breakdown || {}).forEach(([wId, stats]: [string, any]) => {
                     const wName = warehousesMap[wId] || wId;
                     rows.push(createRow(stats.inward, stats.outward, stats.opening, { warehouse_name: wName }));
                 });
-                return rows.length === 0 ? [createRow(0, 0, 0, { warehouse_name: 'No Activity' })] : rows;
+                return rows.length === 0 ? [createRow(item.monthly_inward, item.monthly_outward, item.opening_qty, { warehouse_name: 'Unassigned/Global' })] : rows;
             }
 
             if (viewMode === 'supplier') {
@@ -1020,8 +1084,8 @@ export const Dashboard: React.FC<{ section?: string }> = ({ section = 'raw_mater
         ];
 
         const extraCol = [];
-        if (viewMode === 'supplier') extraCol.push({ field: 'displaySupplier', headerName: 'Supplier', width: 150, pinned: 'left' });
-        if (viewMode === 'warehouse') extraCol.push({ field: 'warehouse_name', headerName: 'Warehouse', width: 150, pinned: 'left' });
+        if (viewMode === 'supplier' || viewMode === 'warehouse_supplier') extraCol.push({ field: 'displaySupplier', headerName: 'Supplier', width: 150, pinned: 'left' });
+        if (viewMode === 'warehouse' || viewMode === 'warehouse_supplier') extraCol.push({ field: 'warehouse_name', headerName: 'Warehouse', width: 150, pinned: 'left' });
 
         return [
             baseCols[0], baseCols[1], ...extraCol,
