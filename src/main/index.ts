@@ -131,6 +131,12 @@ app.whenReady().then(() => {
     autoUpdater.autoDownload = false;
     autoUpdater.autoInstallOnAppQuit = true;
 
+    if (process.platform === 'darwin') {
+        // Disabling signature verification for updates (allows unsigned apps to update)
+        // Caution: This is a security risk if the update source is not trusted.
+        (autoUpdater as any).forceDevUpdateConfig = true;
+    }
+
     // Check for updates IPC
     ipcMain.handle('check-for-updates', () => {
         if (is.dev) {

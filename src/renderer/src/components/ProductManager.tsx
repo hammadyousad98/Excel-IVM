@@ -313,6 +313,7 @@ export const ProductManager: React.FC<{ section?: string }> = ({ section = 'raw_
                 gsm: section === 'finished_goods' ? 0 : (Number(formData.gsm) || 0),
                 item_code: section === 'finished_goods' ? formData.item_code : '',
                 min_stock_level: Number(formData.min_stock_level) || 0,
+                rate: Number(formData.rate) || 0,
                 type: section,
                 updatedAt: serverTimestamp(),
             }
