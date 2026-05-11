@@ -9,7 +9,8 @@ import { generateJobCardPdf } from '../../utils/pdfGenerator'
 import { ConfirmationModal } from '../ConfirmationModal'
 
 const MATERIAL_TYPES = [
-    'Bleach board', 'Box board', 'Art card', 'Art paper', 'Matt paper', 'Rigid box', 'Sticker', 'Offset paper'
+    'Bleach board', 'Box board', 'Art card', 'Art paper', 'Matt paper', 'Rigid box', 'Sticker', 'Offset paper',
+    'CENTURY BOX BOARD', 'POLO BOX BOARD', 'SOLDIER BOX BOARD'
 ]
 
 const PRODUCTION_MACHINES = [
