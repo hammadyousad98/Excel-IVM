@@ -16,6 +16,7 @@ import sortIcon from '../assets/sortingArrows.png'
 import statusIcon from '../assets/reload.png' // You might need to add this asset or use another one
 import { ConfirmationModal } from './ConfirmationModal'
 import { UpdateDNStatusModal } from './UpdateDNStatusModal'
+import { POPreviewModal } from './POPreviewModal'
 import { db } from '../firebase'
 import {
     collection,
@@ -262,6 +263,8 @@ export const PurchaseOrders: React.FC<PurchaseOrdersProps> = ({ onEdit, section 
         isOpen: false,
         grnNo: ''
     })
+
+    const [previewPO, setPreviewPO] = useState<any | null>(null)
 
 
 
@@ -1351,6 +1354,12 @@ export const PurchaseOrders: React.FC<PurchaseOrdersProps> = ({ onEdit, section 
                                 filter: `<img src="${filterIcon}" style="width: 14px; height: 14px;"/>`
                             }}
                             {...gridStateHandlers}
+                            onRowClicked={(params: any) => {
+                                // Ignore if clicking on an action button (buttons are inside the 'actions' column)
+                                if (params.column?.getColId() !== 'actions') {
+                                    setPreviewPO(params.data)
+                                }
+                            }}
                             overlayNoRowsTemplate={selectedMonth ? "No orders found in this month." : "Please select a month..."}
                         />
                     </div>
@@ -1461,6 +1470,16 @@ export const PurchaseOrders: React.FC<PurchaseOrdersProps> = ({ onEdit, section 
                     onClose={() => setDnStatusModal({ isOpen: false, grnNo: '' })}
                     grnNo={dnStatusModal.grnNo}
                 />
+                {/* PO Preview Modal */}
+                {previewPO && (
+                    <POPreviewModal
+                        po={previewPO}
+                        companySettings={companySettings}
+                        section={section}
+                        user={user}
+                        onClose={() => setPreviewPO(null)}
+                    />
+                )}
             </div>
         </div>
     )

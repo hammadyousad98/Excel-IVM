@@ -53,17 +53,44 @@ export const JobCardViewer: React.FC = () => {
             return;
         }
 
-        const q = query(
+        const q1 = query(
             collection(db, 'rm_purchase_orders'),
             where('job_card_id', '==', selectedJobId)
         );
 
-        const unsubscribe = onSnapshot(q, (snapshot) => {
-            const pos = snapshot.docs.map(doc => ({ id: doc.id, ...doc.data() }));
-            setLinkedPOs(pos);
+        const q2 = query(
+            collection(db, 'rm_purchase_orders'),
+            where('job_card_ids', 'array-contains', selectedJobId)
+        );
+
+        // Track results from both queries to merge them
+        let results1: any[] = [];
+        let results2: any[] = [];
+
+        const mergeAndSet = () => {
+            const combined = [...results1];
+            results2.forEach(po2 => {
+                if (!combined.find(p1 => p1.id === po2.id)) {
+                    combined.push(po2);
+                }
+            });
+            setLinkedPOs(combined);
+        };
+
+        const unsub1 = onSnapshot(q1, (snap) => {
+            results1 = snap.docs.map(doc => ({ id: doc.id, ...doc.data() }));
+            mergeAndSet();
         });
 
-        return () => unsubscribe();
+        const unsub2 = onSnapshot(q2, (snap) => {
+            results2 = snap.docs.map(doc => ({ id: doc.id, ...doc.data() }));
+            mergeAndSet();
+        });
+
+        return () => {
+            unsub1();
+            unsub2();
+        };
     }, [selectedJobId]);
 
     // Grouping Logic

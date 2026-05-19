@@ -19,6 +19,7 @@ import {
 import { whatsappService } from '../utils/whatsappService'
 import { ConfirmationModal } from './ConfirmationModal'
 import { SearchableDropdown } from './SearchableDropdown'
+import { MultiSelectSearchableDropdown } from './MultiSelectSearchableDropdown'
 
 // Loading Component
 const LoadingOverlay = () => (
@@ -118,7 +119,7 @@ export const POCreate: React.FC<POCreateProps> = ({ onCancel, onSuccess, initial
     const [selectedCategory, setSelectedCategory] = useState('')
     const [hasSalesTax, setHasSalesTax] = useState(false) // New State for FG Delivery Note
     const [jobCards, setJobCards] = useState<any[]>([])
-    const [selectedJobCardId, setSelectedJobCardId] = useState('')
+    const [selectedJobCardIds, setSelectedJobCardIds] = useState<string[]>([])
     const [freightAmount, setFreightAmount] = useState<number>(0)
 
     const [items, setItems] = useState<any[]>([
@@ -252,8 +253,8 @@ export const POCreate: React.FC<POCreateProps> = ({ onCancel, onSuccess, initial
                 setGrnNo(initialData.grn_no)
                 if (initialData.warehouse_id) setSelectedWarehouse(initialData.warehouse_id)
             }
-            if (section === 'raw_material' && initialData.job_card_id) {
-                setSelectedJobCardId(initialData.job_card_id)
+            if (section === 'raw_material' && (initialData.job_card_ids || initialData.job_card_id)) {
+                setSelectedJobCardIds(initialData.job_card_ids || (initialData.job_card_id ? [initialData.job_card_id] : []));
             }
             if (initialData.freight_amount) {
                 setFreightAmount(initialData.freight_amount)
@@ -373,7 +374,7 @@ export const POCreate: React.FC<POCreateProps> = ({ onCancel, onSuccess, initial
         }
     }, [products, categories, selectedCategory, linkedPO, availablePOs, section]);
 
-    const selectedJobCard = React.useMemo(() => jobCards.find(jc => jc.id === selectedJobCardId), [jobCards, selectedJobCardId]);
+    const selectedJobCard = React.useMemo(() => jobCards.find(jc => selectedJobCardIds.includes(jc.id)), [jobCards, selectedJobCardIds]);
 
     // Derive unique qty_per_box values per product from production history (FG only)
     const productionQtyMap = React.useMemo(() => {
@@ -845,8 +846,9 @@ export const POCreate: React.FC<POCreateProps> = ({ onCancel, onSuccess, initial
                 has_sales_tax: hasSalesTax // Save the flag
             } : {
                 grn_no: grnNo, // Only for RM
-                job_card_id: selectedJobCardId || null,
-                job_card_no: selectedJobCard?.jobCardNo || null,
+                job_card_ids: selectedJobCardIds || [],
+                job_card_id: selectedJobCardIds[0] || null, // Keeping for backward compatibility
+                job_card_no: jobCards.filter(jc => selectedJobCardIds.includes(jc.id)).map(jc => jc.jobCardNo).join(', ') || null,
                 sheet_size_mismatch: sheetSizeMismatch,
                 requires_approval: sheetSizeMismatch
             };
@@ -891,72 +893,69 @@ export const POCreate: React.FC<POCreateProps> = ({ onCancel, onSuccess, initial
                 }));
             }
 
-            // --- ADVANCE LINKED JOB CARD ---
-            if (selectedJobCardId) {
-                try {
-                    const jcRef = doc(db, 'job_cards', selectedJobCardId);
-                    const jcSnap = await getDoc(jcRef);
-                    if (jcSnap.exists()) {
-                        const jcData = jcSnap.data();
-                        const currentPhase = jcData.currentPhase || 1;
-                        const phaseStatuses = jcData.phaseStatuses || {};
-                        const jobCardNo = jcData.jobCardNo || 'Unknown';
+            // --- ADVANCE LINKED JOB CARDS ---
+            if (selectedJobCardIds.length > 0) {
+                for (const jcId of selectedJobCardIds) {
+                    try {
+                        const jcRef = doc(db, 'job_cards', jcId);
+                        const jcSnap = await getDoc(jcRef);
+                        if (jcSnap.exists()) {
+                            const jcData = jcSnap.data();
+                            const currentPhase = jcData.currentPhase || 1;
+                            const phaseStatuses = jcData.phaseStatuses || {};
+                            const jobCardNo = jcData.jobCardNo || 'Unknown';
 
-                        if (section === 'raw_material') {
-                            // RM Logic: Phase 3 -> Phase 4
-                            // RM Logic: Phase 3 -> Phase 4 (Only if Phase 3 is not yet completed)
-                            if (phaseStatuses[3] !== 'completed') {
-                                const newStatuses = { ...phaseStatuses };
-                                newStatuses[3] = 'completed';
-                                let newCurrentPhase = currentPhase;
-                                if (currentPhase === 3) newCurrentPhase = 4;
+                            if (section === 'raw_material') {
+                                if (phaseStatuses[3] !== 'completed') {
+                                    const newStatuses = { ...phaseStatuses };
+                                    newStatuses[3] = 'completed';
+                                    let newCurrentPhase = currentPhase;
+                                    if (currentPhase === 3) newCurrentPhase = 4;
 
-                                await updateDoc(jcRef, {
-                                    phaseStatuses: newStatuses,
-                                    currentPhase: newCurrentPhase,
-                                    status: 'production',
+                                    await updateDoc(jcRef, {
+                                        phaseStatuses: newStatuses,
+                                        currentPhase: newCurrentPhase,
+                                        status: 'production',
+                                        updatedAt: serverTimestamp()
+                                    });
+
+                                    await sendJobCardNotifications(jcId, jobCardNo, 4);
+                                }
+                            } else if (section === 'finished_goods') {
+                                const totalQty = items.reduce((sum, item) => sum + Number(item.quantity || 0), 0);
+                                const newLog = {
+                                    id: Date.now().toString(),
+                                    fgReceived: true,
+                                    deliveryDate: date,
+                                    deliveryChallanNo: orderNo,
+                                    deliveredQty: totalQty,
+                                    createdAt: new Date().toISOString()
+                                };
+
+                                const phase7Data = jcData.phase7Data || {};
+                                const currentLogs = phase7Data.deliveryLogs || [];
+
+                                const updates: any = {
+                                    'phase7Data.deliveryLogs': [...currentLogs, newLog],
                                     updatedAt: serverTimestamp()
-                                });
+                                };
 
-                                // Notify Phase 4
-                                await sendJobCardNotifications(selectedJobCardId, jobCardNo, 4);
-                            }
-                        } else if (section === 'finished_goods') {
-                            // FG Logic: Phase 7 (Only if Phase 7 is not yet completed)
-                            const totalQty = items.reduce((sum, item) => sum + Number(item.quantity || 0), 0);
-                            const newLog = {
-                                id: Date.now().toString(),
-                                fgReceived: true,
-                                deliveryDate: date,
-                                deliveryChallanNo: orderNo,
-                                deliveredQty: totalQty,
-                                createdAt: new Date().toISOString()
-                            };
+                                if (phaseStatuses[7] !== 'completed') {
+                                    updates['phaseStatuses.7'] = 'completed';
+                                    updates.currentPhase = 8;
+                                    updates.status = 'closure';
+                                }
 
-                            const phase7Data = jcData.phase7Data || {};
-                            const currentLogs = phase7Data.deliveryLogs || [];
+                                await updateDoc(jcRef, updates);
 
-                            const updates: any = {
-                                'phase7Data.deliveryLogs': [...currentLogs, newLog],
-                                updatedAt: serverTimestamp()
-                            };
-
-                            if (phaseStatuses[7] !== 'completed') {
-                                updates['phaseStatuses.7'] = 'completed';
-                                updates.currentPhase = 8;
-                                updates.status = 'closure';
-                            }
-
-                            await updateDoc(jcRef, updates);
-
-                            // Notify Phase 8 (Closure)
-                            if (phaseStatuses[7] !== 'completed') {
-                                await sendJobCardNotifications(selectedJobCardId, jobCardNo, 8);
+                                if (phaseStatuses[7] !== 'completed') {
+                                    await sendJobCardNotifications(jcId, jobCardNo, 8);
+                                }
                             }
                         }
+                    } catch (jcErr) {
+                        console.error(`Failed to update linked job card ${jcId}`, jcErr);
                     }
-                } catch (jcErr) {
-                    console.error("Failed to update linked job card", jcErr);
                 }
             }
 
@@ -1034,11 +1033,11 @@ export const POCreate: React.FC<POCreateProps> = ({ onCancel, onSuccess, initial
                         <label className="block mb-2 font-bold text-gray-700">
                             {section === 'finished_goods' ? 'Link Job Card' : 'Job Card (Optional)'}
                         </label>
-                        <SearchableDropdown
+                        <MultiSelectSearchableDropdown
                             options={jobCards.map(jc => ({ id: jc.id, label: jc.jobCardNo }))}
-                            value={selectedJobCardId}
-                            onChange={(val) => setSelectedJobCardId(val as string)}
-                            placeholder={section === 'finished_goods' ? "Select Job Card" : "Select Job Card (Procurement Phase)"}
+                            value={selectedJobCardIds}
+                            onChange={(val) => setSelectedJobCardIds(val as string[])}
+                            placeholder={section === 'finished_goods' ? "Select Job Card(s)" : "Select Job Card(s) (Procurement Phase)"}
                         />
                         {selectedJobCard && section === 'raw_material' && (
                             <div className="mt-2 p-2 bg-yellow-50 border border-yellow-200 rounded text-xs">
