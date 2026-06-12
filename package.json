@@ -1,6 +1,6 @@
 {
   "name": "inventory-management-system",
-  "version": "1.1.14",
+  "version": "1.1.15",
   "description": "Inventory & PO Management System",
   "main": "./out/main/index.js",
   "author": "Antigravity",

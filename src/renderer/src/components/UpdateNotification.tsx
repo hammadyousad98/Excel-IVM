@@ -38,8 +38,7 @@ export const UpdateNotification: React.FC = () => {
 
         // @ts-ignore
         const handleUpdateError = (_event, err) => {
-            console.error('Update error:', err)
-            setError(typeof err === 'string' ? err : 'Unknown error')
+            console.warn('[Updater] Update error (silent):', err)
             setDownloading(false)
         }
 
@@ -56,7 +55,9 @@ export const UpdateNotification: React.FC = () => {
             // Check for updates shortly after mount
             setTimeout(() => {
                 // @ts-ignore
-                window.electron.ipcRenderer.invoke('check-for-updates')
+                window.electron.ipcRenderer.invoke('check-for-updates').catch((err: any) => {
+                    console.warn('[Updater] Check failed silently:', err);
+                });
             }, 30000)
         }
 
@@ -90,7 +91,7 @@ export const UpdateNotification: React.FC = () => {
         setError(null)
     }
 
-    if (!updateAvailable && !error) return null
+    if (!updateAvailable && !updateReady) return null
 
     return (
         <div className="fixed bottom-4 right-4 z-50 w-96 bg-white rounded-lg shadow-xl border border-gray-200 overflow-hidden animate-fade-in-up">

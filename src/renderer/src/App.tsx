@@ -87,7 +87,6 @@ const MainApp: React.FC = () => {
         return (
             <>
                 <Login />
-                <UpdateNotification />
             </>
         )
     }
