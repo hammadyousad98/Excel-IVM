@@ -129,7 +129,12 @@ app.whenReady().then(() => {
 
     // Auto-updater configuration
     autoUpdater.autoDownload = false;
-    autoUpdater.autoInstallOnAppQuit = true;
+    const ghToken = import.meta.env?.VITE_GH_TOKEN || process.env.GH_TOKEN || '';
+    if (ghToken) {
+        autoUpdater.requestHeaders = {
+            "Authorization": `token ${ghToken}`
+        };
+    } autoUpdater.autoInstallOnAppQuit = true;
 
     if (process.platform === 'darwin') {
         // Disabling signature verification for updates (allows unsigned apps to update)
@@ -146,7 +151,12 @@ app.whenReady().then(() => {
             // You might wont to fake it for testing UI
             // return { update: "fake", version: "1.0.1" };
         }
-        return autoUpdater.checkForUpdates();
+        try {
+            return autoUpdater.checkForUpdates();
+        } catch (error) {
+            console.error("AutoUpdater check failed:", error);
+            return null;
+        }
     });
 
     ipcMain.handle('start-download', () => {

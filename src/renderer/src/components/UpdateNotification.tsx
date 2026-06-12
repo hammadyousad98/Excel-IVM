@@ -57,7 +57,7 @@ export const UpdateNotification: React.FC = () => {
             setTimeout(() => {
                 // @ts-ignore
                 window.electron.ipcRenderer.invoke('check-for-updates')
-            }, 3000)
+            }, 30000)
         }
 
 
