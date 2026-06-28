@@ -159,6 +159,26 @@ export const JobCardsList: React.FC<JobCardsListProps> = ({ deepLink, onDeepLink
     const [editingJob, setEditingJob] = useState<any>(null)
     const [targetPhase, setTargetPhase] = useState<number | undefined>(undefined)
     const [isDeepLinkLoading, setIsDeepLinkLoading] = useState(false)
+    const [productsMap, setProductsMap] = useState<Map<string, string>>(new Map())
+
+    // Fetch fg_products for Item Code lookup
+    useEffect(() => {
+        let isSubscribed = true;
+        const fetchProducts = async () => {
+            const querySnap = await getDocs(collection(db, 'fg_products'));
+            if (!isSubscribed) return;
+            const map = new Map<string, string>();
+            querySnap.forEach(doc => {
+                const data = doc.data();
+                if (data.description && data.item_code) {
+                    map.set(data.description, data.item_code);
+                }
+            });
+            setProductsMap(map);
+        };
+        fetchProducts();
+        return () => { isSubscribed = false; };
+    }, []);
 
     // Ag-Grid API State
     const [gridApi, setGridApi] = useState<any>(null)
@@ -256,6 +276,17 @@ export const JobCardsList: React.FC<JobCardsListProps> = ({ deepLink, onDeepLink
         { headerName: 'Date', field: 'jobCardDate', sortable: true, filter: true, width: 120 },
         { headerName: 'Customer', field: 'customerData.customerName', sortable: true, filter: true, flex: 1 },
         { headerName: 'Job Name', field: 'customerData.jobName', sortable: true, filter: true, flex: 1 },
+        { 
+            headerName: 'Item Code', 
+            field: 'itemCode', 
+            sortable: true, 
+            filter: true, 
+            width: 130,
+            valueGetter: (params: any) => { 
+                const name = params.data?.customerData?.jobName; 
+                return name ? (productsMap.get(name) || '') : ''; 
+            }
+        },
         { headerName: 'Current Phase', field: 'currentPhase', sortable: true, filter: true, width: 130 },
         {
             headerName: 'Status',

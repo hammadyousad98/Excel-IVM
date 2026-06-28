@@ -123,7 +123,7 @@ export const POCreate: React.FC<POCreateProps> = ({ onCancel, onSuccess, initial
     const [freightAmount, setFreightAmount] = useState<number>(0)
 
     const [items, setItems] = useState<any[]>([
-        { product_id: '', quantity: 0, rate: 0, length: 0, width: 0, gsm: 0, calculated_kgs: 0, allow_decimals: true }
+        { product_id: '', quantity: 0, rate: 0, length: 0, width: 0, gsm: 0, calculated_kgs: 0, allow_decimals: true, job_card_ids: [] }
     ])
     const [showConfirm, setShowConfirm] = useState(false)
     const [errorModal, setErrorModal] = useState<{ open: boolean; message: string }>({ open: false, message: '' })
@@ -214,10 +214,26 @@ export const POCreate: React.FC<POCreateProps> = ({ onCancel, onSuccess, initial
         );
         unsubJCs = onSnapshot(jcQuery, (snap: any) => {
             if (!isSubscribed) return;
-            const fetchedJCs = snap.docs
+            let fetchedJCs = snap.docs
                 .map((d: any) => ({ id: d.id, ...d.data() }))
-                .filter((jc: any) => jc.currentPhase < 8)
+                .filter((jc: any) => section === 'finished_goods' 
+                  ? (jc.currentPhase >= 7 && jc.status !== 'completed')
+                  : (jc.currentPhase >= 3 && jc.currentPhase < 8)
+                )
                 .sort((a: any, b: any) => (b.jobCardNo || '').localeCompare(a.jobCardNo || ''));
+
+            // For FG, also filter out job cards where total delivered >= ordered qty
+            // We need the deliveryLogs to check this — fetch them from the job card data
+            if (section === 'finished_goods') {
+              fetchedJCs = fetchedJCs.filter((jc: any) => {
+                const totalDelivered = (jc.phase7Data?.deliveryLogs || [])
+                  .reduce((sum: number, log: any) => sum + Number(log.deliveredQty || 0), 0);
+                const ordered = Number(jc.customerData?.poQuantity || 0);
+                if (ordered <= 0) return true; // No qty set, keep showing
+                return totalDelivered < ordered;
+              });
+            }
+
             setJobCards(fetchedJCs);
         });
 
@@ -256,6 +272,9 @@ export const POCreate: React.FC<POCreateProps> = ({ onCancel, onSuccess, initial
             if (section === 'raw_material' && (initialData.job_card_ids || initialData.job_card_id)) {
                 setSelectedJobCardIds(initialData.job_card_ids || (initialData.job_card_id ? [initialData.job_card_id] : []));
             }
+            if (section === 'finished_goods' && (initialData.job_card_ids || initialData.job_card_id)) {
+                setSelectedJobCardIds(initialData.job_card_ids || (initialData.job_card_id ? [initialData.job_card_id] : []));
+            }
             if (initialData.freight_amount) {
                 setFreightAmount(initialData.freight_amount)
             }
@@ -275,7 +294,8 @@ export const POCreate: React.FC<POCreateProps> = ({ onCancel, onSuccess, initial
                     short_qty_per_box: i.short_qty_per_box || 0,
                     category: i.category,
                     calculated_kgs: i.calculated_kgs || 0,
-                    allow_decimals: i.allow_decimals !== undefined ? i.allow_decimals : true
+                    allow_decimals: i.allow_decimals !== undefined ? i.allow_decimals : true,
+                    job_card_ids: i.job_card_ids || []
                 })))
             }
         }
@@ -293,7 +313,7 @@ export const POCreate: React.FC<POCreateProps> = ({ onCancel, onSuccess, initial
 
 
     const addItem = () => {
-        setItems([...items, { product_id: '', quantity: 0, rate: 0, length: 0, width: 0, gsm: 0, uom: '', has_short_item: false, short_no_of_boxes: 0, short_qty_per_box: 0, calculated_kgs: 0, allow_decimals: true }])
+        setItems([...items, { product_id: '', quantity: 0, rate: 0, length: 0, width: 0, gsm: 0, uom: '', has_short_item: false, short_no_of_boxes: 0, short_qty_per_box: 0, calculated_kgs: 0, allow_decimals: true, job_card_ids: [] }])
     }
 
     const removeItem = (index: number) => {
@@ -374,7 +394,7 @@ export const POCreate: React.FC<POCreateProps> = ({ onCancel, onSuccess, initial
         }
     }, [products, categories, selectedCategory, linkedPO, availablePOs, section]);
 
-    const selectedJobCard = React.useMemo(() => jobCards.find(jc => selectedJobCardIds.includes(jc.id)), [jobCards, selectedJobCardIds]);
+
 
     // Derive unique qty_per_box values per product from production history (FG only)
     const productionQtyMap = React.useMemo(() => {
@@ -750,22 +770,27 @@ export const POCreate: React.FC<POCreateProps> = ({ onCancel, onSuccess, initial
                     short_qty_per_box: Number(item.short_qty_per_box || 0),
                     category: item.category || '', // Persist item category
                     item_code: product ? (product.item_code || '') : '', // Persist item code for PDF
-                    product_description: product ? product.description : productId
+                    product_description: product ? product.description : productId,
+                    job_card_ids: item.job_card_ids || []
                 }
             }))
 
             // Check for Sheet Size Mismatch (Paper & Board)
             let sheetSizeMismatch = false;
-            if (section === 'raw_material' && selectedJobCard) {
-                processedItems.forEach(item => {
+            if (section === 'raw_material') {
+                processedItems.forEach((item: any) => {
                     if (item.category === 'PAPER & BOARD' || item.gsm > 0) {
-                        const jcL = Number(selectedJobCard.phase2Data?.sheetSizeL || 0);
-                        const jcW = Number(selectedJobCard.phase2Data?.sheetSizeW || 0);
-                        const jcGsm = Number(selectedJobCard.phase2Data?.sheetSizeGsm || 0);
-
-                        if (jcL !== item.length || jcW !== item.width || jcGsm !== item.gsm) {
-                            sheetSizeMismatch = true;
-                        }
+                        (item.job_card_ids || []).forEach((jcId: string) => {
+                            const jc = jobCards.find(j => j.id === jcId);
+                            if (jc) {
+                                const jcL = Number(jc.phase2Data?.sheetSizeL || 0);
+                                const jcW = Number(jc.phase2Data?.sheetSizeW || 0);
+                                const jcGsm = Number(jc.phase2Data?.sheetSizeGsm || 0);
+                                if (jcL !== Number(item.length) || jcW !== Number(item.width) || jcGsm !== Number(item.gsm)) {
+                                    sheetSizeMismatch = true;
+                                }
+                            }
+                        });
                     }
                 });
             }
@@ -835,7 +860,6 @@ export const POCreate: React.FC<POCreateProps> = ({ onCancel, onSuccess, initial
                 // Stock updates happen via 'Add Entry' (GRN).
             }
 
-            // Conditional fields based on section
             const extraFields = section === 'finished_goods' ? {
                 linked_po_id: linkedPO || null,
                 vehicle_no: vehicleNo,
@@ -846,9 +870,8 @@ export const POCreate: React.FC<POCreateProps> = ({ onCancel, onSuccess, initial
                 has_sales_tax: hasSalesTax // Save the flag
             } : {
                 grn_no: grnNo, // Only for RM
-                job_card_ids: selectedJobCardIds || [],
-                job_card_id: selectedJobCardIds[0] || null, // Keeping for backward compatibility
-                job_card_no: jobCards.filter(jc => selectedJobCardIds.includes(jc.id)).map(jc => jc.jobCardNo).join(', ') || null,
+                job_card_ids: Array.from(new Set(processedItems.flatMap((i: any) => i.job_card_ids || []))),
+                job_card_id: null,
                 sheet_size_mismatch: sheetSizeMismatch,
                 requires_approval: sheetSizeMismatch
             };
@@ -894,8 +917,15 @@ export const POCreate: React.FC<POCreateProps> = ({ onCancel, onSuccess, initial
             }
 
             // --- ADVANCE LINKED JOB CARDS ---
-            if (selectedJobCardIds.length > 0) {
-                for (const jcId of selectedJobCardIds) {
+            if (section === 'raw_material') {
+                const paperItemJcIds = new Set<string>();
+                processedItems.forEach((item: any) => {
+                    if (item.category === 'PAPER & BOARD' || item.gsm > 0) {
+                        (item.job_card_ids || []).forEach((id: string) => paperItemJcIds.add(id));
+                    }
+                });
+
+                for (const jcId of Array.from(paperItemJcIds)) {
                     try {
                         const jcRef = doc(db, 'job_cards', jcId);
                         const jcSnap = await getDoc(jcRef);
@@ -905,23 +935,54 @@ export const POCreate: React.FC<POCreateProps> = ({ onCancel, onSuccess, initial
                             const phaseStatuses = jcData.phaseStatuses || {};
                             const jobCardNo = jcData.jobCardNo || 'Unknown';
 
-                            if (section === 'raw_material') {
-                                if (phaseStatuses[3] !== 'completed') {
-                                    const newStatuses = { ...phaseStatuses };
-                                    newStatuses[3] = 'completed';
-                                    let newCurrentPhase = currentPhase;
-                                    if (currentPhase === 3) newCurrentPhase = 4;
+                            if (phaseStatuses[3] !== 'completed') {
+                                const newStatuses = { ...phaseStatuses, 3: 'completed' };
+                                let newCurrentPhase = currentPhase;
+                                if (currentPhase === 3) newCurrentPhase = 4;
 
-                                    await updateDoc(jcRef, {
-                                        phaseStatuses: newStatuses,
-                                        currentPhase: newCurrentPhase,
-                                        status: 'production',
-                                        updatedAt: serverTimestamp()
-                                    });
+                                await updateDoc(jcRef, {
+                                    phaseStatuses: newStatuses,
+                                    currentPhase: newCurrentPhase,
+                                    status: 'production',
+                                    updatedAt: serverTimestamp()
+                                });
+                                await sendJobCardNotifications(jcId, jobCardNo, 4);
+                            }
+                        }
+                    } catch (jcErr) {
+                        console.error(`Failed to update linked job card ${jcId}`, jcErr);
+                    }
+                }
+            } else if (section === 'finished_goods') {
+                // On edit: remove old logs first from previously linked JCs
+                if (initialData) {
+                    const oldJcIds: string[] = initialData.job_card_ids || (initialData.job_card_id ? [initialData.job_card_id] : []);
+                    const oldOrderNo = initialData.order_no;
+                    for (const jcId of oldJcIds) {
+                        try {
+                            const jcRef = doc(db, 'job_cards', jcId);
+                            const jcSnap = await getDoc(jcRef);
+                            if (jcSnap.exists()) {
+                                const existingLogs = jcSnap.data().phase7Data?.deliveryLogs || [];
+                                await updateDoc(jcRef, {
+                                    'phase7Data.deliveryLogs': existingLogs.filter((l: any) => l.deliveryChallanNo !== oldOrderNo),
+                                    updatedAt: serverTimestamp()
+                                });
+                            }
+                        } catch (err) { console.error('Failed to remove old DC log', err); }
+                    }
+                }
 
-                                    await sendJobCardNotifications(jcId, jobCardNo, 4);
-                                }
-                            } else if (section === 'finished_goods') {
+                if (selectedJobCardIds.length > 0) {
+                    for (const jcId of selectedJobCardIds) {
+                        try {
+                            const jcRef = doc(db, 'job_cards', jcId);
+                            const jcSnap = await getDoc(jcRef);
+                            if (jcSnap.exists()) {
+                                const jcData = jcSnap.data();
+                                const phaseStatuses = jcData.phaseStatuses || {};
+                                const jobCardNo = jcData.jobCardNo || 'Unknown';
+
                                 const totalQty = items.reduce((sum, item) => sum + Number(item.quantity || 0), 0);
                                 const newLog = {
                                     id: Date.now().toString(),
@@ -952,9 +1013,9 @@ export const POCreate: React.FC<POCreateProps> = ({ onCancel, onSuccess, initial
                                     await sendJobCardNotifications(jcId, jobCardNo, 8);
                                 }
                             }
+                        } catch (jcErr) {
+                            console.error(`Failed to update linked job card ${jcId}`, jcErr);
                         }
-                    } catch (jcErr) {
-                        console.error(`Failed to update linked job card ${jcId}`, jcErr);
                     }
                 }
             }
@@ -1029,33 +1090,19 @@ export const POCreate: React.FC<POCreateProps> = ({ onCancel, onSuccess, initial
                             </select>
                         </div>
                     )}
-                    <div>
-                        <label className="block mb-2 font-bold text-gray-700">
-                            {section === 'finished_goods' ? 'Link Job Card' : 'Job Card (Optional)'}
-                        </label>
-                        <MultiSelectSearchableDropdown
-                            options={jobCards.map(jc => ({ id: jc.id, label: jc.jobCardNo }))}
-                            value={selectedJobCardIds}
-                            onChange={(val) => setSelectedJobCardIds(val as string[])}
-                            placeholder={section === 'finished_goods' ? "Select Job Card(s)" : "Select Job Card(s) (Procurement Phase)"}
-                        />
-                        {selectedJobCard && section === 'raw_material' && (
-                            <div className="mt-2 p-2 bg-yellow-50 border border-yellow-200 rounded text-xs">
-                                <span className="font-bold text-yellow-800">Required Sheet Size: </span>
-                                {(selectedJobCard.phase2Data?.sheetSizeL || selectedJobCard.phase2Data?.sheetSizeW || selectedJobCard.phase2Data?.sheetSizeGsm) ? (
-                                    <span className="font-semibold">
-                                        L: {selectedJobCard.phase2Data.sheetSizeL || '-'}, 
-                                        W: {selectedJobCard.phase2Data.sheetSizeW || '-'}, 
-                                        GSM: {selectedJobCard.phase2Data.sheetSizeGsm || '-'}
-                                    </span>
-                                ) : (
-                                    <span className="font-semibold text-gray-500 italic">
-                                        {selectedJobCard.phase2Data?.sheetSize || 'No sheet size specified in Pre-Press'}
-                                    </span>
-                                )}
-                            </div>
-                        )}
-                    </div>
+                    {section === 'finished_goods' && (
+                        <div>
+                            <label className="block mb-2 font-bold text-gray-700">
+                                Link Job Card
+                            </label>
+                            <MultiSelectSearchableDropdown
+                                options={jobCards.map(jc => ({ id: jc.id, label: jc.jobCardNo }))}
+                                value={selectedJobCardIds}
+                                onChange={(val) => setSelectedJobCardIds(val as string[])}
+                                placeholder="Select Job Card(s)"
+                            />
+                        </div>
+                    )}
                 </div>
 
                 {section === 'finished_goods' && (
@@ -1196,6 +1243,7 @@ export const POCreate: React.FC<POCreateProps> = ({ onCancel, onSuccess, initial
                                 <div className="w-24">Weight (Kg)</div>
                             </>
                         )}
+                        {section === 'raw_material' && <div className="w-36">Job Card(s)</div>}
                         {section === 'finished_goods' && (
                             <>
                                 <div className="w-24">No. Boxes</div>
@@ -1253,6 +1301,8 @@ export const POCreate: React.FC<POCreateProps> = ({ onCancel, onSuccess, initial
                                             // Auto-fill UOM and Rate
                                             if (product.uom) updateItem(index, 'uom', product.uom)
                                             if (product.rate !== undefined && product.rate !== null) updateItem(index, 'rate', product.rate)
+                                            // Auto-fill item_code
+                                            updateItem(index, 'item_code', product.item_code || '')
 
                                             // Auto-fill qty_per_box from production history (FG DN only)
                                             if (section === 'finished_goods') {
@@ -1292,6 +1342,9 @@ export const POCreate: React.FC<POCreateProps> = ({ onCancel, onSuccess, initial
                                         return true;
                                     }).map(p => <option key={p.id} value={p.description} />)}
                                 </datalist>
+                                {section === 'finished_goods' && item.item_code && (
+                                    <div className="text-xs text-gray-500 mt-0.5 font-mono">Code: {item.item_code}</div>
+                                )}
                             </div>
 
                             {section !== 'finished_goods' && (
@@ -1348,20 +1401,6 @@ export const POCreate: React.FC<POCreateProps> = ({ onCancel, onSuccess, initial
                                                     </label>
                                                 </div>
 
-                                                {/* Required Reference from Job Card */}
-                                                {selectedJobCard && (
-                                                    <div className="col-span-4 mt-1 bg-yellow-50 p-1 rounded border border-yellow-200">
-                                                        <span className="text-[9px] font-bold text-yellow-700">Required: </span>
-                                                        <span className="text-[9px] text-yellow-800">
-                                                            {selectedJobCard.phase2Data?.sheetSizeL || '-'} x {selectedJobCard.phase2Data?.sheetSizeW || '-'} x {selectedJobCard.phase2Data?.sheetSizeGsm || '-'}
-                                                        </span>
-                                                        {(Number(selectedJobCard.phase2Data?.sheetSizeL) !== Number(item.length) || 
-                                                          Number(selectedJobCard.phase2Data?.sheetSizeW) !== Number(item.width) || 
-                                                          Number(selectedJobCard.phase2Data?.sheetSizeGsm) !== Number(item.gsm)) && (
-                                                            <span className="text-[9px] font-bold text-red-600 ml-2"> (Mismatch!)</span>
-                                                        )}
-                                                    </div>
-                                                )}
                                             </>
                                     ) : (
                                         /* Spacers for Non-Paper Items */
@@ -1373,6 +1412,38 @@ export const POCreate: React.FC<POCreateProps> = ({ onCancel, onSuccess, initial
                                         </>
                                     )}
                                 </>
+                            )}
+
+                            {section === 'raw_material' && (
+                                <div className="w-36">
+                                    <MultiSelectSearchableDropdown
+                                        options={jobCards.map(jc => ({ id: jc.id, label: jc.jobCardNo }))}
+                                        value={item.job_card_ids || []}
+                                        onChange={(val) => updateItem(index, 'job_card_ids', val)}
+                                        placeholder="JC (optional)"
+                                    />
+                                    {/* Show size requirement for each selected job card */}
+                                    {(item.job_card_ids || []).map((jcId: string) => {
+                                        const jc = jobCards.find(j => j.id === jcId);
+                                        if (!jc) return null;
+                                        const L = jc.phase2Data?.sheetSizeL;
+                                        const W = jc.phase2Data?.sheetSizeW;
+                                        const G = jc.phase2Data?.sheetSizeGsm;
+                                        const hasDims = L || W || G;
+                                        const mismatch = hasDims && (
+                                            Number(L) !== Number(item.length) ||
+                                            Number(W) !== Number(item.width) ||
+                                            Number(G) !== Number(item.gsm)
+                                        );
+                                        return (
+                                            <div key={jcId} className={`mt-1 p-1 rounded border text-[9px] ${mismatch ? 'bg-red-50 border-red-200' : 'bg-yellow-50 border-yellow-200'}`}>
+                                                <span className="font-bold">{jc.jobCardNo}: </span>
+                                                {hasDims ? `${L || '-'} x ${W || '-'} x ${G || '-'}` : 'No size in Pre-Press'}
+                                                {mismatch && <span className="text-red-600 font-bold ml-1">(Mismatch!)</span>}
+                                            </div>
+                                        );
+                                    })}
+                                </div>
                             )}
 
                             {section === 'finished_goods' && (

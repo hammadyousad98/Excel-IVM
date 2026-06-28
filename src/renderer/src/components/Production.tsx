@@ -197,7 +197,13 @@ export const Production: React.FC = () => {
             const prodsSnap = await getDocs(collection(db, 'fg_products'))
             const pMap = new Map()
             prodsSnap.docs.forEach(doc => {
-                pMap.set(doc.id, doc.data())
+                const data = doc.data()
+                if (data.item_code) {
+                    pMap.set(doc.id, data.item_code)
+                    if (data.description) {
+                        pMap.set(data.description, data.item_code)
+                    }
+                }
             })
             setProductsMap(pMap)
         }
@@ -318,10 +324,9 @@ export const Production: React.FC = () => {
             field: 'item_code',
             sortable: true,
             filter: true,
-            width: 130,
+            width: 100,
             valueGetter: (params: any) => {
-                if (params.data.item_code) return params.data.item_code;
-                return params.data.product_id ? (productsMap.get(params.data.product_id)?.item_code || '') : '';
+                return productsMap.get(params.data.product_id) || productsMap.get(params.data.product_name) || params.data.item_code || '';
             }
         },
         { headerName: 'Product', field: 'product_name', sortable: true, filter: true, flex: 2 },

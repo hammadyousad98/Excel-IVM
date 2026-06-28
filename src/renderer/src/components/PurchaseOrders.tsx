@@ -427,6 +427,42 @@ export const PurchaseOrders: React.FC<PurchaseOrdersProps> = ({ onEdit, section 
             const poRef = doc(db, POCollection, po.id);
             batch.delete(poRef);
 
+            // Remove DC log from linked job cards
+            const poOrderNo = po.order_no || po.id;
+            const linkedJcIds: string[] = po.job_card_ids || (po.job_card_id ? [po.job_card_id] : []);
+
+            for (const jcId of linkedJcIds) {
+                try {
+                    const jcRef = doc(db, 'job_cards', jcId);
+                    const jcSnap = await getDoc(jcRef);
+                    if (jcSnap.exists()) {
+                        const jcData = jcSnap.data();
+                        const existingLogs = jcData.phase7Data?.deliveryLogs || [];
+                        const updatedLogs = existingLogs.filter((log: any) => log.deliveryChallanNo !== poOrderNo);
+                        
+                        // Calculate total delivered qty after removing this log
+                        const totalDelivered = updatedLogs.reduce((sum: number, log: any) => sum + Number(log.deliveredQty || 0), 0);
+                        const poQty = Number(jcData.customerData?.poQuantity || 0);
+                        
+                        const updates: any = {
+                            'phase7Data.deliveryLogs': updatedLogs,
+                            updatedAt: serverTimestamp()
+                        };
+                        
+                        // If removing this DC makes totalDelivered < poQty and phase 7 was completed, revert phase 7
+                        if (jcData.phaseStatuses?.[7] === 'completed' && totalDelivered < poQty) {
+                            updates['phaseStatuses.7'] = 'pending';
+                            updates.currentPhase = 7;
+                            updates.status = 'in_progress';
+                        }
+                        
+                        await updateDoc(jcRef, updates);
+                    }
+                } catch (err) {
+                    console.error(`Failed to remove DC log from job card ${jcId}`, err);
+                }
+            }
+
             await batch.commit();
 
             setSyncResult({
@@ -994,6 +1030,7 @@ export const PurchaseOrders: React.FC<PurchaseOrdersProps> = ({ onEdit, section 
                             {params.data.items.map((i: any, idx: number) => (
                                 <div key={idx} className="text-xs leading-tight mb-1 border-b border-gray-100 last:border-0 pb-1 h-6 flex items-center">
                                     <span className="font-bold">{i.product_description || i.manual_product_name || 'Unknown Item'}</span>
+                                    {i.item_code && <span className="text-gray-400 text-[10px] ml-1 font-mono">({i.item_code})</span>}
                                     {i.length ? <span className="text-gray-500 ml-1 text-[10px]">[ {i.length}x{i.width} {i.gsm}g ]</span> : ''}
                                 </div>
                             ))}

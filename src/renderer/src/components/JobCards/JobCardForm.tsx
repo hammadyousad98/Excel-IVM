@@ -95,8 +95,11 @@ export const JobCardForm: React.FC<JobCardFormProps> = ({ onClose, initialData, 
 
     // Phase 3 (Procurement)
     const [phase3Data, setPhase3Data] = useState(initialData?.phase3Data || {
-        materialType: '', materialSize: '', gsm: '', noOfSheets: '', comments: ''
+        materialType: '', materialSize: '', gsm: '', noOfSheets: '', comments: '', poNumbers: '', manualEntry: false
     })
+    const [phase3Mode, setPhase3Mode] = useState<'auto' | 'manual'>(
+        initialData?.phase3Data?.manualEntry ? 'manual' : 'auto'
+    );
 
     // Phase 4 (Store) - Linked to Inventory
     const [phase4Data, setPhase4Data] = useState(initialData?.phase4Data?.storeLogs ? initialData.phase4Data : {
@@ -476,15 +479,42 @@ export const JobCardForm: React.FC<JobCardFormProps> = ({ onClose, initialData, 
     useEffect(() => {
         if (!activeDocId) return;
 
-        const q = query(
-            collection(db, 'rm_purchase_orders'),
-            where('job_card_id', '==', activeDocId)
-        );
+        let isSubscribed = true;
 
-        const unsubscribe = onSnapshot(q, (snapshot) => {
-            if (!snapshot.empty) {
-                const poDocs = snapshot.docs.map(d => ({ id: d.id, ...d.data() }));
-                const allItems = poDocs.flatMap((po: any) => po.items || []);
+        const fetchPOs = () => {
+            const qArray = query(
+                collection(db, 'rm_purchase_orders'),
+                where('job_card_ids', 'array-contains', activeDocId)
+            );
+            
+            const qLegacy = query(
+                collection(db, 'rm_purchase_orders'),
+                where('job_card_id', '==', activeDocId)
+            );
+
+            // We can just use onSnapshot on both and merge them, but to keep it clean,
+            // we'll run getDocs for legacy and onSnapshot for primary inside
+            let legacyDocs: any[] = [];
+            
+            getDocs(qLegacy).then(snapLegacy => {
+                if (!isSubscribed) return;
+                legacyDocs = snapLegacy.docs.map(d => ({ id: d.id, ...d.data() }));
+            }).catch(console.error);
+
+            const unsubscribeArray = onSnapshot(qArray, (snapshotArray) => {
+                if (!isSubscribed) return;
+                
+                const arrayDocs = snapshotArray.docs.map(d => ({ id: d.id, ...d.data() }));
+                
+                // Merge and deduplicate
+                const allDocsMap = new Map();
+                legacyDocs.forEach(d => allDocsMap.set(d.id, d));
+                arrayDocs.forEach(d => allDocsMap.set(d.id, d));
+                
+                const poDocs = Array.from(allDocsMap.values());
+                
+                if (poDocs.length > 0) {
+                    const allItems = poDocs.flatMap((po: any) => po.items || []);
                 
                 if (allItems.length > 0) {
                     // Extract unique types, sizes, and gsm
@@ -511,11 +541,17 @@ export const JobCardForm: React.FC<JobCardFormProps> = ({ onClose, initialData, 
                     });
                 }
             }
-        }, (err) => {
-            console.error("Phase 3 Sync Error:", err);
         });
 
-        return () => unsubscribe();
+        return unsubscribeArray;
+        };
+
+        const unsubscribe = fetchPOs();
+
+        return () => {
+            isSubscribed = false;
+            unsubscribe();
+        };
     }, [activeDocId]);
 
     const isPhaseUnlocked = (phaseNum: number) => {
@@ -879,6 +915,15 @@ export const JobCardForm: React.FC<JobCardFormProps> = ({ onClose, initialData, 
                 }
             }
 
+            if (phaseNum === 3 && phase3Data.manualEntry) {
+                try {
+                    const msg = `Job Card ${savedCardNo} Phase 3 has been completed manually. Ready for Phase 4.`;
+                    await sendNotification(4, msg, savedCardNo, docRef.id);
+                } catch (error) {
+                    console.error("Failed to send Phase 4 notifications", error);
+                }
+            }
+
         } catch (err) {
             console.error("Failed to save job card", err)
             setError(activeDocId ? "Failed to update job card." : "Failed to create new job card.")
@@ -1165,6 +1210,15 @@ export const JobCardForm: React.FC<JobCardFormProps> = ({ onClose, initialData, 
                                                         }}
                                                         placeholder="Search Product..."
                                                         disabled={!canEditPhase(1)}
+                                                    />
+                                                </div>
+                                                <div>
+                                                    <label className="block text-xs font-bold text-gray-700 mb-1">Item Code</label>
+                                                    <input 
+                                                        type="text" 
+                                                        value={products.find(p => p.description === customerData.jobName)?.item_code || ''} 
+                                                        readOnly 
+                                                        className="w-full border rounded p-2 text-sm bg-gray-50 text-gray-500 font-mono" 
                                                     />
                                                 </div>
                                                 <div>
@@ -1619,36 +1673,112 @@ export const JobCardForm: React.FC<JobCardFormProps> = ({ onClose, initialData, 
                                         <p className="text-gray-500 italic">This phase is locked. Phase 2 must be completed first.</p>
                                     ) : (
                                         <div className="space-y-4">
-                                            <div className="bg-blue-50 border-l-4 border-blue-400 p-4 mb-4 text-blue-800 text-sm font-semibold">
-                                                ℹ️ This phase is automatically completed when a Raw Material Purchase Order (Paper & Board) is created and linked to this Job Card.
-                                                Manual entry is disabled.
-                                            </div>
-                                            <div className="grid grid-cols-2 gap-4 opacity-75 pointer-events-none">
-                                                <div>
-                                                    <label className="block text-xs font-bold text-gray-700 mb-1">Material Type</label>
-                                                    <input type="text" value={phase3Data.materialType} readOnly className="w-full border rounded p-2 text-sm bg-gray-50" />
+                                            {/* Mode Toggle - only visible to po_officer and admin */}
+                                            {(user?.role === 'po_officer' || user?.role === 'admin') && (
+                                                <div className="flex gap-2 mb-4">
+                                                    <button
+                                                        onClick={() => setPhase3Mode('auto')}
+                                                        className={`px-4 py-2 rounded text-sm font-bold border transition ${phase3Mode === 'auto' ? 'bg-blue-600 text-white border-blue-600' : 'bg-white text-gray-600 border-gray-300 hover:bg-gray-50'}`}
+                                                    >
+                                                        Auto (Linked PO)
+                                                    </button>
+                                                    <button
+                                                        onClick={() => setPhase3Mode('manual')}
+                                                        className={`px-4 py-2 rounded text-sm font-bold border transition ${phase3Mode === 'manual' ? 'bg-green-600 text-white border-green-600' : 'bg-white text-gray-600 border-gray-300 hover:bg-gray-50'}`}
+                                                    >
+                                                        Manual Entry
+                                                    </button>
                                                 </div>
-                                                <div>
-                                                    <label className="block text-xs font-bold text-gray-700 mb-1">Material Size</label>
-                                                    <input type="text" value={phase3Data.materialSize} readOnly className="w-full border rounded p-2 text-sm bg-gray-50" />
-                                                </div>
-                                                <div>
-                                                    <label className="block text-xs font-bold text-gray-700 mb-1">GSM</label>
-                                                    <input type="text" value={phase3Data.gsm} readOnly className="w-full border rounded p-2 text-sm bg-gray-50" />
-                                                </div>
-                                                <div>
-                                                    <label className="block text-xs font-bold text-gray-700 mb-1">Number of Sheets</label>
-                                                    <input type="text" value={phase3Data.noOfSheets} readOnly className="w-full border rounded p-2 text-sm bg-gray-50" />
-                                                </div>
-                                                <div>
-                                                    <label className="block text-xs font-bold text-gray-700 mb-1">Phase 3 Comments</label>
-                                                    <textarea
-                                                        value={phase3Data.comments}
-                                                        readOnly
-                                                        className="w-full border rounded p-2 text-sm bg-gray-50 h-20 resize-none"
-                                                    />
-                                                </div>
-                                            </div>
+                                            )}
+
+                                            {phase3Mode === 'auto' ? (
+                                                <>
+                                                    <div className="bg-blue-50 border-l-4 border-blue-400 p-4 mb-4 text-blue-800 text-sm font-semibold">
+                                                        ℹ️ This phase is automatically completed when a Raw Material Purchase Order (Paper & Board) is created and linked to this Job Card.
+                                                    </div>
+                                                    <div className="grid grid-cols-2 gap-4 opacity-75 pointer-events-none">
+                                                        <div>
+                                                            <label className="block text-xs font-bold text-gray-700 mb-1">Material Type</label>
+                                                            <input type="text" value={phase3Data.materialType} readOnly className="w-full border rounded p-2 text-sm bg-gray-50" />
+                                                        </div>
+                                                        <div>
+                                                            <label className="block text-xs font-bold text-gray-700 mb-1">Material Size</label>
+                                                            <input type="text" value={phase3Data.materialSize} readOnly className="w-full border rounded p-2 text-sm bg-gray-50" />
+                                                        </div>
+                                                        <div>
+                                                            <label className="block text-xs font-bold text-gray-700 mb-1">GSM</label>
+                                                            <input type="text" value={phase3Data.gsm} readOnly className="w-full border rounded p-2 text-sm bg-gray-50" />
+                                                        </div>
+                                                        <div>
+                                                            <label className="block text-xs font-bold text-gray-700 mb-1">Number of Sheets</label>
+                                                            <input type="text" value={phase3Data.noOfSheets} readOnly className="w-full border rounded p-2 text-sm bg-gray-50" />
+                                                        </div>
+                                                        <div>
+                                                            <label className="block text-xs font-bold text-gray-700 mb-1">Phase 3 Comments</label>
+                                                            <textarea
+                                                                value={phase3Data.comments}
+                                                                readOnly
+                                                                className="w-full border rounded p-2 text-sm bg-gray-50 h-20 resize-none"
+                                                            />
+                                                        </div>
+                                                    </div>
+                                                </>
+                                            ) : (
+                                                <>
+                                                    <div className="bg-green-50 border-l-4 border-green-400 p-4 mb-4 text-green-800 text-sm font-semibold">
+                                                        Manual Entry Mode — Fill in the procurement details manually and mark as complete.
+                                                    </div>
+                                                    <div className="grid grid-cols-2 gap-4">
+                                                        <div>
+                                                            <label className="block text-xs font-bold text-gray-700 mb-1">Material Type</label>
+                                                            <input type="text" value={phase3Data.materialType} onChange={e => setPhase3Data({ ...phase3Data, materialType: e.target.value })} disabled={!canEditPhase(3)} className="w-full border rounded p-2 text-sm disabled:bg-gray-50" />
+                                                        </div>
+                                                        <div>
+                                                            <label className="block text-xs font-bold text-gray-700 mb-1">Material Size</label>
+                                                            <input type="text" value={phase3Data.materialSize} onChange={e => setPhase3Data({ ...phase3Data, materialSize: e.target.value })} disabled={!canEditPhase(3)} className="w-full border rounded p-2 text-sm disabled:bg-gray-50" />
+                                                        </div>
+                                                        <div>
+                                                            <label className="block text-xs font-bold text-gray-700 mb-1">GSM</label>
+                                                            <input type="text" value={phase3Data.gsm} onChange={e => setPhase3Data({ ...phase3Data, gsm: e.target.value })} disabled={!canEditPhase(3)} className="w-full border rounded p-2 text-sm disabled:bg-gray-50" />
+                                                        </div>
+                                                        <div>
+                                                            <label className="block text-xs font-bold text-gray-700 mb-1">Number of Sheets</label>
+                                                            <input type="text" value={phase3Data.noOfSheets} onChange={e => setPhase3Data({ ...phase3Data, noOfSheets: e.target.value })} disabled={!canEditPhase(3)} className="w-full border rounded p-2 text-sm disabled:bg-gray-50" />
+                                                        </div>
+                                                        <div>
+                                                            <label className="block text-xs font-bold text-gray-700 mb-1">PO Numbers (optional, comma-separated)</label>
+                                                            <input type="text" value={phase3Data.poNumbers || ''} onChange={e => setPhase3Data({ ...phase3Data, poNumbers: e.target.value })} disabled={!canEditPhase(3)} className="w-full border rounded p-2 text-sm disabled:bg-gray-50" />
+                                                        </div>
+                                                        <div>
+                                                            <label className="block text-xs font-bold text-gray-700 mb-1">Phase 3 Comments</label>
+                                                            <textarea
+                                                                value={phase3Data.comments}
+                                                                onChange={e => setPhase3Data({ ...phase3Data, comments: e.target.value })}
+                                                                disabled={!canEditPhase(3)}
+                                                                className="w-full border rounded p-2 text-sm disabled:bg-gray-50 h-20 resize-none"
+                                                            />
+                                                        </div>
+                                                    </div>
+                                                    {canEditPhase(3) && (
+                                                        <div className="flex justify-end mt-4 border-t pt-4">
+                                                            <button 
+                                                                onClick={() => {
+                                                                    if (!phase3Data.materialType || !phase3Data.materialSize || !phase3Data.gsm || !phase3Data.noOfSheets) {
+                                                                        setError("Please fill in all required material fields.");
+                                                                        return;
+                                                                    }
+                                                                    setPhase3Data((prev: any) => ({ ...prev, manualEntry: true }));
+                                                                    triggerConfirm(3);
+                                                                }} 
+                                                                disabled={loading} 
+                                                                className="bg-green-600 hover:bg-green-700 text-white px-6 py-2 rounded shadow font-bold text-sm transition disabled:opacity-50"
+                                                            >
+                                                                {phaseStatuses[3] === 'completed' ? 'Update & Confirm Phase 3' : 'Mark Phase 3 Complete'}
+                                                            </button>
+                                                        </div>
+                                                    )}
+                                                </>
+                                            )}
                                         </div>
                                     )}
                                 </div>
@@ -2117,6 +2247,7 @@ export const JobCardForm: React.FC<JobCardFormProps> = ({ onClose, initialData, 
                                                         <thead className="bg-gray-100 text-gray-600 font-bold uppercase tracking-wider">
                                                             <tr>
                                                                 <th className="px-3 py-2">FG Received</th>
+                                                                <th className="px-3 py-2">Product (Item Code)</th>
                                                                 <th className="px-3 py-2">Delivery Date</th>
                                                                 <th className="px-3 py-2">Challan No.</th>
                                                                 <th className="px-3 py-2">Delivered Qty</th>
@@ -2125,7 +2256,7 @@ export const JobCardForm: React.FC<JobCardFormProps> = ({ onClose, initialData, 
                                                         <tbody className="divide-y divide-gray-100">
                                                             {(!phase7Data.deliveryLogs || phase7Data.deliveryLogs.length === 0) ? (
                                                                 <tr>
-                                                                    <td colSpan={5} className="px-3 py-4 text-center text-gray-400 italic">No delivery logs recorded yet.</td>
+                                                                    <td colSpan={6} className="px-3 py-4 text-center text-gray-400 italic">No delivery logs recorded yet.</td>
                                                                 </tr>
                                                             ) : (
                                                                 phase7Data.deliveryLogs.map((log: any) => (
@@ -2134,6 +2265,12 @@ export const JobCardForm: React.FC<JobCardFormProps> = ({ onClose, initialData, 
                                                                             <span className={`px-2 py-0.5 rounded-full text-[10px] font-bold ${log.fgReceived ? 'bg-green-100 text-green-700' : 'bg-gray-100 text-gray-600'}`}>
                                                                                 {log.fgReceived ? 'YES' : 'NO'}
                                                                             </span>
+                                                                        </td>
+                                                                        <td className="px-3 py-2 font-medium">
+                                                                            {customerData.jobName} 
+                                                                            {products.find(p => p.description === customerData.jobName)?.item_code && 
+                                                                                <span className="text-gray-500 text-[10px] font-mono ml-1">({products.find(p => p.description === customerData.jobName)?.item_code})</span>
+                                                                            }
                                                                         </td>
                                                                         <td className="px-3 py-2 italic text-gray-500">{log.deliveryDate || '-'}</td>
                                                                         <td className="px-3 py-2 font-medium">{log.deliveryChallanNo || '-'}</td>

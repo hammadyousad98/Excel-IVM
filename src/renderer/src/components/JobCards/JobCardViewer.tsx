@@ -22,6 +22,25 @@ export const JobCardViewer: React.FC = () => {
     const { user } = useAuth()
     const [isDeleteModalOpen, setIsDeleteModalOpen] = useState(false)
     const [isDeleting, setIsDeleting] = useState(false)
+    const [productsMap, setProductsMap] = useState<Map<string, string>>(new Map())
+
+    useEffect(() => {
+        let isSubscribed = true;
+        const fetchProducts = async () => {
+            const querySnap = await getDocs(collection(db, 'fg_products'));
+            if (!isSubscribed) return;
+            const map = new Map<string, string>();
+            querySnap.forEach(doc => {
+                const data = doc.data();
+                if (data.description && data.item_code) {
+                    map.set(data.description, data.item_code);
+                }
+            });
+            setProductsMap(map);
+        };
+        fetchProducts();
+        return () => { isSubscribed = false; };
+    }, []);
 
     // UI state for sidebar
     const [expandedYears, setExpandedYears] = useState<Record<string, boolean>>({})
@@ -339,7 +358,14 @@ export const JobCardViewer: React.FC = () => {
                                         <td className="border border-black p-2 font-bold w-1/6">Customer Name</td>
                                         <td className="border border-black p-2 w-2/6" colSpan={2}>{selectedJob.customerData?.customerName || '-'}</td>
                                         <td className="border border-black p-2 font-bold w-1/6">Job Name</td>
-                                        <td className="border border-black p-2 w-2/6" colSpan={2}>{selectedJob.customerData?.jobName || '-'}</td>
+                                        <td className="border border-black p-2 w-2/6" colSpan={2}>
+                                            {selectedJob.customerData?.jobName || '-'}
+                                            {selectedJob.customerData?.jobName && productsMap.get(selectedJob.customerData.jobName) && (
+                                                <span className="text-xs font-mono bg-gray-100 px-1 rounded ml-1">
+                                                    {productsMap.get(selectedJob.customerData.jobName)}
+                                                </span>
+                                            )}
+                                        </td>
                                     </tr>
                                     <tr>
                                         <td className="border border-black p-2 font-bold w-1/6">PO Date</td>
