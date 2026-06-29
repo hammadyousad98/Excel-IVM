@@ -342,7 +342,7 @@ export const Inventory: React.FC<{ section?: string }> = ({ section = 'raw_mater
     const gridStateHandlers = useGridState(`inventory-${section}`, gridApi)
 
     const { user } = useAuth()
-    const isAdmin = user?.role === 'admin' || (section === 'finished_goods' && user?.role === 'delivery_officer')
+    const isAdmin = user?.role === 'admin' || (section === 'finished_goods' && (user?.role === 'delivery_officer' || user?.role === 'production'))
 
     // --- Load Warehouses ---
     useEffect(() => {

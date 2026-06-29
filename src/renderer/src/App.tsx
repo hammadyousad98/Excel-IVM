@@ -132,7 +132,7 @@ const MainApp: React.FC = () => {
                                         Raw Material
                                     </button>
                                 )}
-                                {!isPoOfficer && (
+                                {['admin', 'delivery_officer', 'marketing', 'marketing_manager', 'production'].includes(user?.role) && (
                                     <button
                                         onClick={() => { setActiveSection('finished_goods'); setView(isDeliveryOfficer ? 'pos' : (isMarketing || isMarketingManager) ? 'sales-orders' : isProductionOfficer ? 'production' : 'dashboard'); }}
                                         className={`px-3 py-1 rounded text-sm font-medium ${activeSection === 'finished_goods' ? 'bg-white shadow text-blue-600' : 'text-gray-600 hover:text-gray-900'}`}
@@ -153,41 +153,45 @@ const MainApp: React.FC = () => {
                             {activeSection !== 'job_cards' ? (
                                 <>
                                     {/* Dashboard — visible to all */}
-                                    <button onClick={() => setView('dashboard')} className={`px-3 py-2 rounded ${view === 'dashboard' ? 'bg-gray-200' : ''}`}>Dashboard</button>
+                                    {(activeSection === 'raw_material' ? true : ['admin', 'delivery_officer', 'marketing', 'marketing_manager', 'production'].includes(user?.role)) && (
+                                        <button onClick={() => setView('dashboard')} className={`px-3 py-2 rounded ${view === 'dashboard' ? 'bg-gray-200' : ''}`}>Dashboard</button>
+                                    )}
 
                                     {/* Inventory Sheet — visible for restricted FG roles (read-only), hidden for others if they toggled RM */}
-                                    {(!isRestrictedFgRole || true) && (
+                                    {(activeSection === 'raw_material' ? !isRestrictedFgRole : ['admin', 'delivery_officer', 'marketing', 'marketing_manager', 'production'].includes(user?.role)) && (
                                         <button onClick={() => setView('inventory')} className={`px-3 py-2 rounded ${view === 'inventory' ? 'bg-gray-200' : ''}`}>
                                             Inventory
                                         </button>
                                     )}
 
                                     {/* Sales Orders — FG only. Always visible for marketing roles, visible for admin in FG */}
-                                    {((isMarketing || isMarketingManager) || (isFinishedGoods && (isAdmin || isDeliveryOfficer || isProductionOfficer))) && (
+                                    {(activeSection === 'raw_material' ? (isMarketing || isMarketingManager) : ['admin', 'delivery_officer', 'marketing', 'marketing_manager', 'production'].includes(user?.role)) && (
                                         <button onClick={() => setView('sales-orders')} className={`px-3 py-2 rounded ${view === 'sales-orders' ? 'bg-gray-200' : ''}`}>
                                             Sales Orders
                                         </button>
                                     )}
 
                                     {/* Production — FG only. Always visible for production_officer, visible for admin in FG */}
-                                    {(isProductionOfficer || (isFinishedGoods && (isAdmin || isDeliveryOfficer || isMarketing || isMarketingManager))) && (
+                                    {(activeSection === 'raw_material' ? isProductionOfficer : ['admin', 'delivery_officer', 'marketing', 'marketing_manager', 'production'].includes(user?.role)) && (
                                         <button onClick={() => setView('production')} className={`px-3 py-2 rounded ${view === 'production' ? 'bg-gray-200' : ''}`}>
                                             Production
                                         </button>
                                     )}
 
                                     {/* Purchase/Delivery Orders — visible to all */}
-                                    {(!isRestrictedFgRole || isDeliveryOfficer) && (
+                                    {(activeSection === 'raw_material' ? !isRestrictedFgRole : ['admin', 'delivery_officer', 'production'].includes(user?.role)) && (
                                         <button onClick={() => setView('pos')} className={`px-3 py-2 rounded ${view === 'pos' ? 'bg-gray-200' : ''}`}>
                                             {isFinishedGoods ? 'Delivery Orders' : 'Purchase Orders'}
                                         </button>
                                     )}
 
                                     {/* Products — visible to all */}
-                                    <button onClick={() => setView('products')} className={`px-3 py-2 rounded ${view === 'products' ? 'bg-gray-200' : ''}`}>Products</button>
+                                    {(activeSection === 'raw_material' ? true : ['admin', 'delivery_officer', 'marketing', 'marketing_manager', 'production'].includes(user?.role)) && (
+                                        <button onClick={() => setView('products')} className={`px-3 py-2 rounded ${view === 'products' ? 'bg-gray-200' : ''}`}>Products</button>
+                                    )}
 
                                     {/* Suppliers/Buyers — hidden for restricted FG roles (except buyers/customers in FG) */}
-                                    {(!isRestrictedFgRole || isFinishedGoods) && (
+                                    {(activeSection === 'raw_material' ? !isRestrictedFgRole : ['admin', 'delivery_officer', 'marketing', 'marketing_manager', 'production'].includes(user?.role)) && (
                                         <button onClick={() => setView('suppliers')} className={`px-3 py-2 rounded ${view === 'suppliers' ? 'bg-gray-200' : ''}`}>{isFinishedGoods ? 'Buyers' : 'Suppliers'}</button>
                                     )}
                                 </>

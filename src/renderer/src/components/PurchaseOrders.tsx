@@ -1231,7 +1231,7 @@ export const PurchaseOrders: React.FC<PurchaseOrdersProps> = ({ onEdit, section 
                 // FG: Admin OR DeliveryOfficer
                 const canEdit = user?.role === 'admin' ||
                     (section === 'raw_material' && user?.role === 'po_officer') ||
-                    (section === 'finished_goods' && user?.role === 'delivery_officer');
+                    (section === 'finished_goods' && (user?.role === 'delivery_officer' || user?.role === 'production'));
 
                 return (
                     <div className="flex gap-2 items-center justify-center h-full">

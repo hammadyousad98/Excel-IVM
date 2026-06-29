@@ -165,7 +165,7 @@ const ColumnManager: React.FC<{ api: any; onClose: () => void; gridId: string }>
 
 export const SalesOrders: React.FC = () => {
     const { user } = useAuth()
-    const canEdit = user?.role === 'admin' || user?.role === 'marketing' || user?.role === 'marketing_manager' || user?.role === 'delivery_officer'
+    const canEdit = user?.role === 'admin' || user?.role === 'marketing' || user?.role === 'marketing_manager' || user?.role === 'delivery_officer' || user?.role === 'production'
 
     // State
     const [sheets, setSheets] = useState<any[]>([])

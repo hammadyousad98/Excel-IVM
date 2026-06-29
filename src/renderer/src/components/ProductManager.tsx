@@ -60,7 +60,7 @@ export const ProductManager: React.FC<{ section?: string }> = ({ section = 'raw_
 
     const canEdit = isAdmin ||
         (section === 'raw_material' && isPurchaseOfficer) ||
-        (section === 'finished_goods' && (isDeliveryOfficer || isMarketing || isMarketingManager))
+        (section === 'finished_goods' && (isDeliveryOfficer || isMarketing || isMarketingManager || user?.role === 'production'))
 
     // Product Modal State
     const [isModalOpen, setIsModalOpen] = useState(false)
@@ -755,7 +755,8 @@ export const ProductManager: React.FC<{ section?: string }> = ({ section = 'raw_
                         user?.role === 'delivery_officer' ||
                         user?.role === 'marketing' ||
                         user?.role === 'marketing_manager' ||
-                        user?.role === 'production_officer'
+                        user?.role === 'production_officer' ||
+                        user?.role === 'production'
                     ))
                 ) && (
                         <button
